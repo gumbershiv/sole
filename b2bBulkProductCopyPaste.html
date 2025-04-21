@@ -1,0 +1,67 @@
+<template>
+    <div if:true={isLoading} class="cstm-spinner">
+        <lightning-spinner 
+            alternative-text={labels.labelSpinnerAltText}>
+        </lightning-spinner>
+    </div>
+
+    <template if:true={showInputForm}>
+        <div class="slds-m-top_medium slds-m-bottom_large slds-page-header__title">{labels.titleCopyPasteUpload}</div>
+        <div class="slds-m-bottom_medium">{labels.msgCopyPasteInstructions}</div>
+        <div class="slds-text-title_bold slds-m-bottom_medium">{labels.msgUploadLimitInfo}</div>
+        
+
+        <div class="slds-form-element slds-m-top_large slds-m-bottom_large">
+            <div class="slds-grid">
+                <div class="slds-size_1-of-2 slds-max-small-size_1-of-1">
+                    <textarea 
+                        class="textarea" 
+                        data-id="fileUpload" 
+                        name="file uploader"
+                        onchange={uploadFile}
+                        placeholder={labels.placeholderTextArea}>
+                    </textarea>
+                </div>
+            </div>
+        </div>
+        <div class="slds-p-bottom_small slds-grid">
+            <div>
+                <button 
+                    class="slds-button slds-button_brand" 
+                    onclick={addToCart}>
+                    {labels.labelAddToCart}
+                </button>
+            </div>
+            <div class="slds-checkbox">
+                <div>
+                    <lightning-input 
+                        data-id="input-checkbox" 
+                        type="checkbox"
+                        label={labels.labelReplaceCart}>
+                    </lightning-input>
+                </div>
+            </div>
+        </div>
+    </template>
+
+
+    <template if:true={showResultTable}>
+        <span
+            class="slds-m-top_medium slds-m-bottom_large slds-page-header__title">
+            {labels.titleCopyPasteResultTable}
+        </span>
+        <button 
+            class="slds-button slds-button_brand slds-m-bottom_large"
+            onclick={startOver}>
+            {labels.labelStartOver}
+        </button>
+        <div>
+            <lightning-datatable 
+                key-field="id" 
+                hide-checkbox-column="true" 
+                data={tableData} 
+                columns={columns}>
+            </lightning-datatable>
+        </div>
+    </template>
+</template>
