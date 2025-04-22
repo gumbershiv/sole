@@ -1,26 +1,13 @@
-// LWC APIs
 import { LightningElement, api, wire } from 'lwc';
-
-// Data imports
 import communityId from '@salesforce/community/Id';
-
-// Message Channels
 import { publish, MessageContext } from 'lightning/messageService';
 import cartChanged from '@salesforce/messageChannel/lightning__commerce_cartChanged';
-
-// Commerce APIs
 import cartApi from 'commerce/cartApi';
-
-// Apex code
 import addToCart from '@salesforce/apex/B2BBulkProductToCartController.addToCart';
-
-// Other LWCs
 import { PageLabelStoreMixin } from 'c/b2bPageLabelStoreMixin';
 import { toastUtil, dataGrabber } from 'c/b2bUtil';
 
-export default class B2BCopyPasteOrder extends PageLabelStoreMixin(
-    LightningElement
-) {
+export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElement) {
     constructor() {
         super('b2bCopyPasteOrder', true);
     }
@@ -28,13 +15,10 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(
     uploadInfo = [];
     inputData = [];
     effectiveAccountId;
-    errors = [];
-
     isLoading = false;
     showInputForm = true;
     showResultTable = false;
-
-    tableData = [];
+    errors = [];
 
     @api valMaxProductAmount;
 
@@ -83,34 +67,37 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(
         const allRows = data.split(/\r?\n/);
         const expectedHeader =
             super.labels.csvHeaderSkuNumber.trim() + ',' + super.labels.csvHeaderQuantity.trim();
-        const start = allRows[0].startsWith(expectedHeader) ? 1 : 0;
+        const startIndex = allRows[0].trim().startsWith(expectedHeader) ? 1 : 0;
 
-        for (let i = start; i < allRows.length; i++) {
-            const rawRow = allRows[i];
-            const cleanedRow = rawRow.replace('\t', ',');
+        for (let i = startIndex; i < allRows.length; i++) {
+            const rawRow = allRows[i].trim();
+            if (rawRow === '') break;
+
+            const cleanedRow = rawRow.includes(',') ? rawRow : rawRow.replace(/\t/, ',');
             const columns = cleanedRow.split(',');
 
             const lineNumber = i + 1;
 
             if (columns.length !== 2) {
                 this.inputData.push({
-                    sku: rawRow,
+                    sku: cleanedRow,
                     qty: '',
-                    notes: `Line ${lineNumber}: Format invalid. Expected 2 columns (SKU, Quantity).`,
+                    notes: `Line ${lineNumber}: Invalid format. Expect 2 columns (SKU, Quantity).`,
                     notesColor: 'slds-text-color_error',
                 });
-                this.errors.push(`Line ${lineNumber}: Incorrect format.`);
+                this.errors.push(`Line ${lineNumber}: Invalid format.`);
                 continue;
             }
 
             const sku = columns[0].trim();
-            const qty = parseInt(columns[1].trim(), 10);
+            const qtyStr = columns[1].trim();
+            const qty = parseInt(qtyStr, 10);
 
             if (!sku || isNaN(qty) || qty <= 0) {
                 this.inputData.push({
                     sku,
-                    qty: columns[1].trim(),
-                    notes: `Line ${lineNumber}: Invalid SKU or quantity.`,
+                    qty: qtyStr,
+                    notes: `Line ${lineNumber}: Invalid SKU or Quantity.`,
                     notesColor: 'slds-text-color_error',
                 });
                 this.errors.push(`Line ${lineNumber}: Invalid data.`);
@@ -120,134 +107,160 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(
         }
     }
 
-    addToCart(event) {
-        let successData = [];
-        let errorData = [];
+    async validateProductAvailability() {
+        const validItems = [];
+        const invalidItems = [];
 
-        const data = this.template.querySelector('[data-id = "fileUpload"]').value;
+        for (const item of this.uploadInfo) {
+            try {
+                // Replace this mock with actual Apex call if needed
+                const result = await this.mockCheckProductAvailability(item.sku, item.quantity);
+
+                if (result.isAvailable && result.isQtyValid) {
+                    validItems.push(item);
+                } else {
+                    invalidItems.push({
+                        sku: item.sku,
+                        qty: item.quantity,
+                        notes: result.message || 'Not available or invalid quantity.',
+                        notesColor: 'slds-text-color_error',
+                    });
+                    this.errors.push(`SKU ${item.sku}: ${result.message}`);
+                }
+            } catch {
+                invalidItems.push({
+                    sku: item.sku,
+                    qty: item.quantity,
+                    notes: 'Error checking product.',
+                    notesColor: 'slds-text-color_error',
+                });
+                this.errors.push(`SKU ${item.sku}: Availability check failed.`);
+            }
+        }
+
+        this.uploadInfo = validItems;
+        this.inputData = this.inputData.concat(invalidItems);
+    }
+
+    async addToCart(event) {
+        const data = this.template.querySelector('[data-id="fileUpload"]').value;
         this.validateInputFormat(data);
 
-        const dataSet = JSON.stringify(this.uploadInfo);
-
-        this.isLoading = true;
-
-        if (this.uploadInfo.length > 0 && this.errors.length === 0) {
-            addToCart({
-                data: dataSet,
-                communityId: communityId,
-                effectiveAccountId: this.effectiveAccountId,
-                isChecked: this.template.querySelector(`[data-id="input-checkbox"]`).checked,
-                cartItemLimit: this.valMaxProductAmount,
-            })
-                .then((result) => {
-                    let showAllSuccessMessage = true;
-                    this.isLoading = false;
-
-                    if (result.isSuccess) {
-                        result.data.forEach((element) => {
-                            let item = {
-                                sku: element.sku,
-                                qty: element.quantity,
-                            };
-
-                            switch (element.message) {
-                                case 'ITEM_SUCCESS':
-                                    element.message = super.labels.msgItemSuccess;
-                                    break;
-                                case 'ERROR_INVALID_SKU':
-                                    element.message = super.labels.msgInvalidSku;
-                                    break;
-                                case 'ERROR_INVALID_QUANTITY':
-                                    element.message = super.labels.msgInvalidQty;
-                                    break;
-                                case 'ERROR_DUPLICATE_SKU':
-                                    element.message = super.labels.msgDuplicateSku;
-                                    break;
-                                case 'ERROR_QUANTITY_RULES':
-                                    element.message = String.format(
-                                        super.labels.msgInvalidQtyRules,
-                                        [element.minimum, element.maximum, element.increment]
-                                    );
-                                    break;
-                                case 'ITEM_REMOVED':
-                                    element.message = super.labels.msgItemRemoved;
-                                    break;
-                                default:
-                                    element.message = element.message;
-                            }
-
-                            item.notes = element.message;
-                            item.notesColor = element.isSuccess
-                                ? 'slds-text-color_success'
-                                : 'slds-text-color_error';
-
-                            if (element.isSuccess) {
-                                successData.push(item);
-                            } else {
-                                errorData.push(item);
-                                showAllSuccessMessage = false;
-                            }
-                        });
-
-                        this.tableData = this.inputData.concat(errorData, successData);
-
-                        if (this.inputData.length > 0) {
-                            showAllSuccessMessage = false;
-                        }
-
-                        if (showAllSuccessMessage) {
-                            toastUtil.toastSuccess(this, {
-                                title: super.labels.labelSuccess,
-                                message: super.labels.msgAddToCartAllSuccess,
-                            });
-                        } else {
-                            toastUtil.toastInfo(this, {
-                                title: super.labels.labelPartialSuccess,
-                                message: super.labels.msgAddToCartNotAllSuccess,
-                            });
-                        }
-
-                        this.showResultTable = true;
-                        this.showInputForm = false;
-
-                        publish(this.messageContext, cartChanged);
-                    } else {
-                        this.showResultTable = false;
-                        this.showInputForm = true;
-                        if (result.message === 'ERROR_UPLOAD_LIMIT') {
-                            result.message = super.labels.msgUploadLimit;
-                        }
-                        toastUtil.toastError(this, {
-                            title: super.labels.labelError,
-                            message: result.message,
-                        });
-                    }
-                })
-                .catch((error) => {
-                    this.isLoading = false;
-                    const message = error?.body?.message || 'Unexpected error';
-                    toastUtil.toastError(this, {
-                        title: super.labels.labelError,
-                        message,
-                    });
-                });
-        } else if (this.errors.length > 0) {
-            this.isLoading = false;
+        if (this.errors.length > 0) {
             toastUtil.toastError(this, {
-                title: super.labels.labelError,
-                message: this.errors.join('\n'),
+                title: 'Invalid Format',
+                message: 'Please correct the highlighted input issues.',
             });
-        } else {
-            this.isLoading = false;
+            return;
+        }
+
+        await this.validateProductAvailability();
+
+        if (this.uploadInfo.length === 0) {
             toastUtil.toastError(this, {
                 title: super.labels.labelError,
                 message: super.labels.msgNothingTodoError,
             });
+            return;
         }
+
+        this.isLoading = true;
+
+        addToCart({
+            data: JSON.stringify(this.uploadInfo),
+            communityId: communityId,
+            effectiveAccountId: this.effectiveAccountId,
+            isChecked: this.template.querySelector(`[data-id="input-checkbox"]`).checked,
+            cartItemLimit: this.valMaxProductAmount,
+        })
+            .then((result) => {
+                this.isLoading = false;
+                let successData = [], errorData = [], showAllSuccess = true;
+
+                if (result.isSuccess) {
+                    result.data.forEach((element) => {
+                        let item = {
+                            sku: element.sku,
+                            qty: element.quantity,
+                            notesColor: element.isSuccess ? 'slds-text-color_success' : 'slds-text-color_error',
+                        };
+
+                        switch (element.message) {
+                            case 'ITEM_SUCCESS':
+                                item.notes = super.labels.msgItemSuccess;
+                                break;
+                            case 'ERROR_INVALID_SKU':
+                                item.notes = super.labels.msgInvalidSku;
+                                break;
+                            case 'ERROR_INVALID_QUANTITY':
+                                item.notes = super.labels.msgInvalidQty;
+                                break;
+                            case 'ERROR_DUPLICATE_SKU':
+                                item.notes = super.labels.msgDuplicateSku;
+                                break;
+                            case 'ERROR_QUANTITY_RULES':
+                                item.notes = String.format(
+                                    super.labels.msgInvalidQtyRules,
+                                    [element.minimum, element.maximum, element.increment]
+                                );
+                                break;
+                            case 'ITEM_REMOVED':
+                                item.notes = super.labels.msgItemRemoved;
+                                break;
+                            default:
+                                item.notes = element.message;
+                        }
+
+                        element.isSuccess ? successData.push(item) : errorData.push(item);
+                        if (!element.isSuccess) showAllSuccess = false;
+                    });
+
+                    this.tableData = this.inputData.concat(errorData).concat(successData);
+                    this.showResultTable = true;
+                    this.showInputForm = false;
+
+                    toastUtil[showAllSuccess ? 'toastSuccess' : 'toastInfo'](this, {
+                        title: showAllSuccess ? super.labels.labelSuccess : super.labels.labelPartialSuccess,
+                        message: showAllSuccess ? super.labels.msgAddToCartAllSuccess : super.labels.msgAddToCartNotAllSuccess,
+                    });
+
+                    publish(this.messageContext, cartChanged);
+                } else {
+                    toastUtil.toastError(this, {
+                        title: super.labels.labelError,
+                        message: result.message === 'ERROR_UPLOAD_LIMIT' ? super.labels.msgUploadLimit : result.message,
+                    });
+                }
+            })
+            .catch((error) => {
+                this.isLoading = false;
+                toastUtil.toastError(this, {
+                    title: super.labels.labelError,
+                    message: error?.body?.message || 'Unknown error',
+                });
+            });
     }
 
     startOver() {
+        this.uploadInfo = [];
+        this.inputData = [];
+        this.errors = [];
         this.showResultTable = false;
         this.showInputForm = true;
+    }
+
+    // Stub method for product validation
+    mockCheckProductAvailability(sku, quantity) {
+        return new Promise((resolve) => {
+            // Simulate SKU lookup and quantity check
+            const isAvailable = sku.startsWith('SKU');
+            const isQtyValid = quantity <= 100;
+            const message = !isAvailable
+                ? 'SKU not found'
+                : !isQtyValid
+                ? 'Quantity exceeds limit'
+                : '';
+            resolve({ isAvailable, isQtyValid, message });
+        });
     }
 }
