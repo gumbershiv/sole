@@ -69,13 +69,13 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(
         this.effectiveAccountId = await dataGrabber.getEffectiveAccountId();
     }
 
-    uploadFile(event) {
+    validateInputFormat(data) {
         debugger;
         var v = this;
         v.uploadInfo = [];
-        v.inputData = [];
+        v.errors = [];
 
-        var data = event.target.value;
+        //var data = event.target.value;
 
         if (data && data.length > 0) {
             v.disabled = false;
@@ -106,12 +106,14 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(
                 }
 
                 if (iQty == 0 || isNaN(iQty)) {
-                    let item = {};
-                    item.sku = rowCells[0];
-                    item.qty = rowCells[1];
-                    item.notesColor = 'slds-text-color_error';
-                    item.notes = super.labels.msgUploadQtyError;
-                    v.inputData.push(item);
+                    // let errors = [];
+                    // errors.push(super.labels.msgUploadQtyError);
+                    // item.sku = rowCells[0];
+                    // item.qty = rowCells[1];
+                    // item.notesColor = 'slds-text-color_error';
+                    // item.notes = super.labels.msgUploadQtyError;
+                    // v.inputData.push(item);
+                    v.errors.push(super.labels.msgUploadQtyError);
                 } else if (qty !== null && iQty > 0) {
                     v.uploadInfo.push({
                         sku: rowCells[0],
@@ -121,16 +123,43 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(
             }
         }
     }
+    
+    // validateInputFormat(data){
+    //     let errors = [];
+    //     for(let i=0; i < data.length; i++){
+    //         const {sku , qty} = data[i];
+    //         if(!sku || qty){
+    //             errors.push(`Line ${i + 1} is invalid. Product and Quantity are required.`);
+    //         }else if (isNaN(qty) || qty<=0){
+    //             errors.push(`Line ${i + 1} has invalid quantity : ${qty}. Quantity must be greater than 0.`);
+    //         }
+    //     }
+    //     return errors;
+    // }
 
     addToCart(event) {
-        var dataSet = JSON.stringify(this.uploadInfo);
+        
         let successData = [];
         let errorData = [];
         console.log('dataSet',dataSet);
+        //console.log('error',JSON.stringify(this.inputData));
+        debugger;
+        var data = this.template.querySelector('[data-id = "fileUpload"]').value;
+        this.validateInputFormat(data);
+        var dataSet = JSON.stringify(this.uploadInfo);
+        var errors = JSON.stringify(this.errors);
+        // const formatError = this.validateInputFormat(this.template.querySelector('[data-id = "fileUpload"]').value);
+        // if(this.inputData.length>0){
+        //     toastUtil.toastSuccess(this, {
+        //         title: 'Invalid',
+        //         message: 'formatError'
+        //     });
+        //     return;
+        // }
 
         this.isLoading = true;
 
-        if (this.uploadInfo.length != 0) {
+        if (this.uploadInfo.length != 0 && this.errors.length != 0) {
             addToCart({
                 data: dataSet,
                 communityId: communityId,
@@ -242,6 +271,11 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(
                         message: message,
                     });
                 });
+        }else if(this.errors.length>0){
+            toastUtil.toastSuccess(this, {
+                            title: 'Invalid',
+                            message: 'formatError'
+                        });
         } else {
             toastUtil.toastError(this, {
                 title: super.labels.labelError,
