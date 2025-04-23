@@ -1,0 +1,12 @@
+@AuraEnabled(Cacheable=true)
+    public static B2BActionResponse getProductDetails(list<String> skus, Integer quantity, String communityId){
+        
+        String webStoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);
+        String effectiveAccountId = B2BUtil.getEffectiveAccountId();
+        //List<String> Skus = new List<String>();
+        //Skus.add(sku);
+        List<String> fields = new List<String>{'B2B_IsProductSellable__c','B2B_IsLatest__c','StockKeepingUnit','Description'};
+            List<B2bUtilProduct.ProductData> productData = B2bUtilProduct.getProductsBySku(webStoreId, effectiveAccountId, skus, fields, true, false, false);
+        system.debug('product Object Data-----'+productData);
+        return new B2BActionResponse(true, 'success', productData);
+    }
