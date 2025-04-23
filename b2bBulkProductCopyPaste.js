@@ -4,6 +4,7 @@ import { publish, MessageContext } from 'lightning/messageService';
 import cartChanged from '@salesforce/messageChannel/lightning__commerce_cartChanged';
 import cartApi from 'commerce/cartApi';
 import addToCart from '@salesforce/apex/B2BBulkProductToCartController.addToCart';
+import getProductDetails from '@salesforce/apex/B2BBulkProductToCartController.getProductDetails';
 import { PageLabelStoreMixin } from 'c/b2bPageLabelStoreMixin';
 import { toastUtil, dataGrabber } from 'c/b2bUtil';
 
@@ -14,38 +15,28 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
 
     uploadInfo = [];
     inputData = [];
+    errors = [];
     effectiveAccountId;
     isLoading = false;
     showInputForm = true;
     showResultTable = false;
-    errors = [];
+    valMaxProductAmount;
 
-    @api valMaxProductAmount;
-
-    @wire(MessageContext)
-    messageContext;
+    @wire(MessageContext) messageContext;
 
     get columns() {
         return [
+            { label: super.labels.labelSkuNumber, fieldName: 'sku', hideDefaultActions: true },
+            { label: super.labels.labelQty, fieldName: 'qty', hideDefaultActions: true },
             {
-                hideDefaultActions: true,
-                label: super.labels.labelSkuNumber,
-                fieldName: 'sku',
-            },
-            {
-                hideDefaultActions: true,
-                label: super.labels.labelQty,
-                fieldName: 'qty',
-            },
-            {
-                hideDefaultActions: true,
                 label: super.labels.labelNotes,
                 fieldName: 'notes',
+                hideDefaultActions: true,
                 cellAttributes: {
                     class: { fieldName: 'notesColor' },
-                    wrapText: true,
-                },
-            },
+                    wrapText: true
+                }
+            }
         ];
     }
 
@@ -59,51 +50,40 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
         this.inputData = [];
         this.errors = [];
 
-        if (!data || data.trim().length === 0) {
-            this.errors.push(super.labels.msgNothingTodoError);
+        if (!data) {
+            this.errors.push('Input is empty.');
             return;
         }
 
-        const allRows = data.split(/\r?\n/);
-        const expectedHeader =
-            super.labels.csvHeaderSkuNumber.trim() + ',' + super.labels.csvHeaderQuantity.trim();
-        const startIndex = allRows[0].trim().startsWith(expectedHeader) ? 1 : 0;
+        const rows = data.trim().split(/\r?\n/);
+        const header = super.labels.csvHeaderSkuNumber.trim() + ',' + super.labels.csvHeaderQuantity.trim();
+        let startIndex = rows[0].startsWith(header) ? 1 : 0;
 
-        for (let i = startIndex; i < allRows.length; i++) {
-            const rawRow = allRows[i].trim();
-            if (rawRow === '') break;
+        for (let i = startIndex; i < rows.length; i++) {
+            const line = rows[i].trim();
+            if (!line) continue;
 
-            const cleanedRow = rawRow.includes(',') ? rawRow : rawRow.replace(/\t/, ',');
-            const columns = cleanedRow.split(',');
+            const delimiter = line.includes(',') ? ',' : line.includes('\t') ? '\t' : null;
 
-            const lineNumber = i + 1;
-
-            if (columns.length !== 2) {
-                this.inputData.push({
-                    sku: cleanedRow,
-                    qty: '',
-                    notes: `Line ${lineNumber}: Invalid format. Expect 2 columns (SKU, Quantity).`,
-                    notesColor: 'slds-text-color_error',
-                });
-                this.errors.push(`Line ${lineNumber}: Invalid format.`);
+            if (!delimiter) {
+                this.errors.push(`Line ${i + 1} has no valid delimiter.`);
                 continue;
             }
 
-            const sku = columns[0].trim();
-            const qtyStr = columns[1].trim();
-            const qty = parseInt(qtyStr, 10);
+            const [sku, quantity] = line.split(delimiter).map(s => s.trim());
 
-            if (!sku || isNaN(qty) || qty <= 0) {
+            if (!sku || isNaN(quantity) || parseInt(quantity) <= 0) {
+                this.errors.push(`Line ${i + 1} has invalid format or quantity.`);
                 this.inputData.push({
                     sku,
-                    qty: qtyStr,
-                    notes: `Line ${lineNumber}: Invalid SKU or Quantity.`,
-                    notesColor: 'slds-text-color_error',
+                    qty: quantity,
+                    notes: 'Invalid SKU or Quantity.',
+                    notesColor: 'slds-text-color_error'
                 });
-                this.errors.push(`Line ${lineNumber}: Invalid data.`);
-            } else {
-                this.uploadInfo.push({ sku, quantity: qty });
+                continue;
             }
+
+            this.uploadInfo.push({ sku, quantity });
         }
     }
 
@@ -111,108 +91,124 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
         const validItems = [];
         const invalidItems = [];
 
-        for (const item of this.uploadInfo) {
-            try {
-                // Replace this mock with actual Apex call if needed
-                const result = await this.mockCheckProductAvailability(item.sku, item.quantity);
+        try {
+            const skuList = this.uploadInfo.map(item => item.sku);
+            const response = await getProductDetails(skuList, null, communityId);
 
-                if (result.isAvailable && result.isQtyValid) {
+            if (response?.isSuccess && Array.isArray(response.data)) {
+                const productMap = new Map();
+                response.data.forEach(prod => productMap.set(prod.StockKeepingUnit, prod));
+
+                for (const item of this.uploadInfo) {
+                    const product = productMap.get(item.sku);
+                    const qty = parseInt(item.quantity, 10);
+
+                    if (!product) {
+                        invalidItems.push({
+                            sku: item.sku,
+                            qty: item.quantity,
+                            notes: 'SKU not found.',
+                            notesColor: 'slds-text-color_error',
+                        });
+                        continue;
+                    }
+
+                    if (!product.B2B_IsProductSellable__c || !product.B2B_IsLatest__c) {
+                        invalidItems.push({
+                            sku: item.sku,
+                            qty: item.quantity,
+                            notes: 'Product is not sellable or outdated.',
+                            notesColor: 'slds-text-color_error',
+                        });
+                        continue;
+                    }
+
+                    const purchaseLimit = product.Purchase_Limit__c || 9999;
+
+                    if (qty > purchaseLimit) {
+                        invalidItems.push({
+                            sku: item.sku,
+                            qty: item.quantity,
+                            notes: `Exceeds purchase limit: ${purchaseLimit}.`,
+                            notesColor: 'slds-text-color_error',
+                        });
+                        continue;
+                    }
+
                     validItems.push(item);
-                } else {
-                    invalidItems.push({
-                        sku: item.sku,
-                        qty: item.quantity,
-                        notes: result.message || 'Not available or invalid quantity.',
-                        notesColor: 'slds-text-color_error',
-                    });
-                    this.errors.push(`SKU ${item.sku}: ${result.message}`);
                 }
-            } catch {
-                invalidItems.push({
-                    sku: item.sku,
-                    qty: item.quantity,
-                    notes: 'Error checking product.',
-                    notesColor: 'slds-text-color_error',
-                });
-                this.errors.push(`SKU ${item.sku}: Availability check failed.`);
-            }
-        }
 
-        this.uploadInfo = validItems;
-        this.inputData = this.inputData.concat(invalidItems);
+                this.uploadInfo = validItems;
+                this.inputData = this.inputData.concat(invalidItems);
+
+                if (invalidItems.length) {
+                    this.errors.push('Some products are invalid or exceed purchase limits.');
+                }
+            } else {
+                this.errors.push('Product validation failed.');
+            }
+        } catch (error) {
+            console.error('Validation error:', error);
+            this.errors.push('Error validating products.');
+        }
     }
 
-    async addToCart(event) {
-        const data = this.template.querySelector('[data-id="fileUpload"]').value;
-        this.validateInputFormat(data);
+    async addToCart() {
+        this.isLoading = true;
+        const rawInput = this.template.querySelector('[data-id="fileUpload"]')?.value;
+        this.validateInputFormat(rawInput);
 
-        if (this.errors.length > 0) {
+        if (this.uploadInfo.length === 0) {
+            this.isLoading = false;
             toastUtil.toastError(this, {
-                title: 'Invalid Format',
-                message: 'Please correct the highlighted input issues.',
+                title: super.labels.labelError,
+                message: super.labels.msgNothingTodoError
             });
             return;
         }
 
         await this.validateProductAvailability();
 
-        if (this.uploadInfo.length === 0) {
+        if (this.errors.length) {
+            this.isLoading = false;
             toastUtil.toastError(this, {
-                title: super.labels.labelError,
-                message: super.labels.msgNothingTodoError,
+                title: 'Validation Failed',
+                message: this.errors.join(', ')
             });
             return;
         }
 
-        this.isLoading = true;
+        const dataSet = JSON.stringify(this.uploadInfo);
 
         addToCart({
-            data: JSON.stringify(this.uploadInfo),
+            data: dataSet,
             communityId: communityId,
             effectiveAccountId: this.effectiveAccountId,
-            isChecked: this.template.querySelector(`[data-id="input-checkbox"]`).checked,
+            isChecked: this.template.querySelector(`[data-id="input-checkbox"]`)?.checked,
             cartItemLimit: this.valMaxProductAmount,
         })
-            .then((result) => {
+            .then(result => {
                 this.isLoading = false;
-                let successData = [], errorData = [], showAllSuccess = true;
 
-                if (result.isSuccess) {
-                    result.data.forEach((element) => {
-                        let item = {
+                const successData = [];
+                const errorData = [];
+                let showAllSuccess = true;
+
+                if (result.isSuccess && result.data) {
+                    result.data.forEach(element => {
+                        const item = {
                             sku: element.sku,
                             qty: element.quantity,
-                            notesColor: element.isSuccess ? 'slds-text-color_success' : 'slds-text-color_error',
+                            notes: this.getMessageForCode(element.message),
+                            notesColor: element.isSuccess ? 'slds-text-color_success' : 'slds-text-color_error'
                         };
 
-                        switch (element.message) {
-                            case 'ITEM_SUCCESS':
-                                item.notes = super.labels.msgItemSuccess;
-                                break;
-                            case 'ERROR_INVALID_SKU':
-                                item.notes = super.labels.msgInvalidSku;
-                                break;
-                            case 'ERROR_INVALID_QUANTITY':
-                                item.notes = super.labels.msgInvalidQty;
-                                break;
-                            case 'ERROR_DUPLICATE_SKU':
-                                item.notes = super.labels.msgDuplicateSku;
-                                break;
-                            case 'ERROR_QUANTITY_RULES':
-                                item.notes = String.format(
-                                    super.labels.msgInvalidQtyRules,
-                                    [element.minimum, element.maximum, element.increment]
-                                );
-                                break;
-                            case 'ITEM_REMOVED':
-                                item.notes = super.labels.msgItemRemoved;
-                                break;
-                            default:
-                                item.notes = element.message;
+                        if (element.isSuccess) {
+                            successData.push(item);
+                        } else {
+                            errorData.push(item);
+                            showAllSuccess = false;
                         }
-
-                        element.isSuccess ? successData.push(item) : errorData.push(item);
-                        if (!element.isSuccess) showAllSuccess = false;
                     });
 
                     this.tableData = this.inputData.concat(errorData).concat(successData);
@@ -228,39 +224,37 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
                 } else {
                     toastUtil.toastError(this, {
                         title: super.labels.labelError,
-                        message: result.message === 'ERROR_UPLOAD_LIMIT' ? super.labels.msgUploadLimit : result.message,
+                        message: result.message || 'Unknown error occurred.'
                     });
                 }
             })
-            .catch((error) => {
+            .catch(error => {
                 this.isLoading = false;
                 toastUtil.toastError(this, {
                     title: super.labels.labelError,
-                    message: error?.body?.message || 'Unknown error',
+                    message: error?.body?.message || 'Unexpected error during add to cart.'
                 });
             });
+    }
+
+    getMessageForCode(code) {
+        switch (code) {
+            case 'ITEM_SUCCESS': return super.labels.msgItemSuccess;
+            case 'ERROR_INVALID_SKU': return super.labels.msgInvalidSku;
+            case 'ERROR_INVALID_QUANTITY': return super.labels.msgInvalidQty;
+            case 'ERROR_DUPLICATE_SKU': return super.labels.msgDuplicateSku;
+            case 'ITEM_REMOVED': return super.labels.msgItemRemoved;
+            case 'ERROR_QUANTITY_RULES':
+                return super.labels.msgInvalidQtyRules;
+            default: return code;
+        }
     }
 
     startOver() {
         this.uploadInfo = [];
         this.inputData = [];
         this.errors = [];
-        this.showResultTable = false;
         this.showInputForm = true;
-    }
-
-    // Stub method for product validation
-    mockCheckProductAvailability(sku, quantity) {
-        return new Promise((resolve) => {
-            // Simulate SKU lookup and quantity check
-            const isAvailable = sku.startsWith('SKU');
-            const isQtyValid = quantity <= 100;
-            const message = !isAvailable
-                ? 'SKU not found'
-                : !isQtyValid
-                ? 'Quantity exceeds limit'
-                : '';
-            resolve({ isAvailable, isQtyValid, message });
-        });
+        this.showResultTable = false;
     }
 }
