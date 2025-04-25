@@ -2,8 +2,18 @@ public Map<String, B2bUtilProduct.ProductData> getSkuToProductMap(List<String> s
     Map<String, B2bUtilProduct.ProductData> skuToProduct2Map = new Map<String, B2bUtilProduct.ProductData>();
     
     // Split SKUs into two chunks (assuming the first chunk can hold up to 500 SKUs)
-    List<String> firstChunk = skus.size() > 500 ? skus.subList(0, 500) : skus;
-    List<String> secondChunk = skus.size() > 500 ? skus.subList(500, skus.size()) : new List<String>();
+    List<String> firstChunk = new List<String>();
+    List<String> secondChunk = new List<String>();
+
+    // Ensure that the first chunk has a maximum of 500 SKUs
+    for (Integer i = 0; i < Math.min(500, skus.size()); i++) {
+        firstChunk.add(skus[i]);
+    }
+
+    // The second chunk will have the remaining SKUs if there are more than 500
+    for (Integer i = 500; i < skus.size(); i++) {
+        secondChunk.add(skus[i]);
+    }
 
     // Fetch product data for the first chunk
     List<B2bUtilProduct.ProductData> productData = B2bUtilProduct.getProductsBySku(webstoreId, effectiveAccountId, firstChunk, null, true, true, true);
