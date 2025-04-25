@@ -1,9 +1,22 @@
- public Map<String, B2bUtilProduct.ProductData> getSkuToProductMap(List<String> skus, Id webstoreId, String effectiveAccountId) {
-        Map<String, B2bUtilProduct.ProductData> skuToProduct2Map = new Map<String, B2bUtilProduct.ProductData>();
-        List<B2bUtilProduct.ProductData> productData = B2bUtilProduct.getProductsBySku(webStoreId, effectiveAccountId, skus, null, true, true, true); // need to call it twice as limit is 500
-        for (B2bUtilProduct.ProductData product : productData) {
-            skuToProduct2Map.put(B2BUtil.toUpperCase(product.SKU), product);
-        }
+public Map<String, B2bUtilProduct.ProductData> getSkuToProductMap(List<String> skus, Id webstoreId, String effectiveAccountId) {
+    Map<String, B2bUtilProduct.ProductData> skuToProduct2Map = new Map<String, B2bUtilProduct.ProductData>();
+    
+    // Split SKUs into two chunks (assuming the first chunk can hold up to 500 SKUs)
+    List<String> firstChunk = skus.subList(0, Math.min(skus.size(), 500));
+    List<String> secondChunk = (skus.size() > 500) ? skus.subList(500, skus.size()) : new List<String>();
 
-        return skuToProduct2Map;
+    // Fetch product data for the first chunk
+    List<B2bUtilProduct.ProductData> productData = B2bUtilProduct.getProductsBySku(webstoreId, effectiveAccountId, firstChunk, null, true, true, true);
+    
+    // If there are remaining SKUs in the second chunk, fetch them
+    if (!secondChunk.isEmpty()) {
+        productData.addAll(B2bUtilProduct.getProductsBySku(webstoreId, effectiveAccountId, secondChunk, null, true, true, true));
     }
+
+    // Populate the map with SKU and corresponding product data
+    for (B2bUtilProduct.ProductData product : productData) {
+        skuToProduct2Map.put(B2BUtil.toUpperCase(product.SKU), product);
+    }
+
+    return skuToProduct2Map;
+}
