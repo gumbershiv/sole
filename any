@@ -1,0 +1,9 @@
+ public Map<String, B2bUtilProduct.ProductData> getSkuToProductMap(List<String> skus, Id webstoreId, String effectiveAccountId) {
+        Map<String, B2bUtilProduct.ProductData> skuToProduct2Map = new Map<String, B2bUtilProduct.ProductData>();
+        List<B2bUtilProduct.ProductData> productData = B2bUtilProduct.getProductsBySku(webStoreId, effectiveAccountId, skus, null, true, true, true); // need to call it twice as limit is 500
+        for (B2bUtilProduct.ProductData product : productData) {
+            skuToProduct2Map.put(B2BUtil.toUpperCase(product.SKU), product);
+        }
+
+        return skuToProduct2Map;
+    }
