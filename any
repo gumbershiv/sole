@@ -1,47 +1,65 @@
 public void insertCartItems(String communityId, String effectiveAccountId, Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap, String cartId) {
-        List<ConnectApi.BatchInput> batchInputs = new List<ConnectApi.BatchInput>();
-        for (B2BCartItemDTO lb2bcartItem : productIdToLb2bCartItemMap.values()) {
-            batchInputs.add(new ConnectApi.BatchInput(this.convertToCartItemInput(lb2bcartItem)));
-        }
+    List<ConnectApi.BatchInput> batchInputs = new List<ConnectApi.BatchInput>();
+    for (B2BCartItemDTO lb2bcartItem : productIdToLb2bCartItemMap.values()) {
+        batchInputs.add(new ConnectApi.BatchInput(this.convertToCartItemInput(lb2bcartItem)));
+    }
 
-        Id webstoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);
-        system.debug('batchInputs'+batchInputs);
-        
-        List<ConnectApi.BatchInput> firstChunk = new List<ConnectApi.BatchInput>();
-        List<ConnectApi.BatchInput> secondChunk = new List<ConnectApi.BatchInput>();
-        
-        for (Integer i = 0; i < Math.min(500, productIdToLb2bCartItemMap.size()); i++) {
-            firstChunk.add(batchInputs[i]);
-        }
-        
-        for (Integer i = 500; i < productIdToLb2bCartItemMap.size(); i++) {
-            secondChunk.add(batchInputs[i]);
-        }
-        
-        System.debug('Total results received: ' + allBatchResults.size());
+    Id webstoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);
+    System.debug('batchInputs: ' + batchInputs);
 
-        /*List<ConnectApi.BatchResult> batchResults = ConnectApi.CommerceCart.addItemsToCart(
-                webstoreId,
-                effectiveAccountId,
-                cartId,
-                batchInputs
+    List<ConnectApi.BatchInput> firstChunk = new List<ConnectApi.BatchInput>();
+    List<ConnectApi.BatchInput> secondChunk = new List<ConnectApi.BatchInput>();
+
+    // Split batchInputs into two chunks (500 items each)
+    for (Integer i = 0; i < Math.min(500, batchInputs.size()); i++) {
+        firstChunk.add(batchInputs[i]);
+    }
+
+    for (Integer i = 500; i < batchInputs.size(); i++) {
+        secondChunk.add(batchInputs[i]);
+    }
+
+    // Process the first chunk
+    List<ConnectApi.BatchResult> firstBatchResults = ConnectApi.CommerceCart.addItemsToCart(
+        webstoreId,
+        effectiveAccountId,
+        cartId,
+        firstChunk
+    );
+    
+    // Process the second chunk (if it exists)
+    List<ConnectApi.BatchResult> secondBatchResults = new List<ConnectApi.BatchResult>();
+    if (!secondChunk.isEmpty()) {
+        secondBatchResults = ConnectApi.CommerceCart.addItemsToCart(
+            webstoreId,
+            effectiveAccountId,
+            cartId,
+            secondChunk
         );
+    }
 
-        system.debug('batchResults.size()'+batchResults);*/
-        for (Integer index = 0; index < batchResults.size(); index++) {
-            ConnectApi.BatchResult batchResult = batchResults.get(index);
-            ConnectApi.CartItemInput cartItemInput = (ConnectApi.CartItemInput) batchInputs.get(index).getInput();
-            B2BCartItemDTO lb2bCartItem = productIdToLb2bCartItemMap.values().get(index);
-            lb2bCartItem.isSuccess = batchResult.isSuccess();
+    // Combine results from both batches
+    List<ConnectApi.BatchResult> allBatchResults = new List<ConnectApi.BatchResult>();
+    allBatchResults.addAll(firstBatchResults);
+    allBatchResults.addAll(secondBatchResults);
 
-            if (batchResult.isSuccess()) {
-                ConnectApi.CartItem cartItemOutput = (ConnectApi.CartItem) batchResult.getResult();
-                lb2bCartItem.cartId = cartItemOutput.cartId;
-                lb2bCartItem.cartItemId = cartItemOutput.cartItemId;
-                lb2bCartItem.message = ITEM_SUCCESS;
-            } else {
-                lb2bCartItem.message = this.convertToMessage(batchResult.getErrorMessage());
-                system.debug('lb2bCartItem.message'+lb2bCartItem.message);
-            }
+    System.debug('Total results received: ' + allBatchResults.size());
+
+    // Process the results from both batches
+    for (Integer index = 0; index < allBatchResults.size(); index++) {
+        ConnectApi.BatchResult batchResult = allBatchResults.get(index);
+        ConnectApi.CartItemInput cartItemInput = (ConnectApi.CartItemInput) batchInputs.get(index).getInput();
+        B2BCartItemDTO lb2bCartItem = new List<B2BCartItemDTO>(productIdToLb2bCartItemMap.values()).get(index);
+        lb2bCartItem.isSuccess = batchResult.isSuccess();
+
+        if (batchResult.isSuccess()) {
+            ConnectApi.CartItem cartItemOutput = (ConnectApi.CartItem) batchResult.getResult();
+            lb2bCartItem.cartId = cartItemOutput.cartId;
+            lb2bCartItem.cartItemId = cartItemOutput.cartItemId;
+            lb2bCartItem.message = ITEM_SUCCESS;
+        } else {
+            lb2bCartItem.message = this.convertToMessage(batchResult.getErrorMessage());
+            System.debug('lb2bCartItem.message: ' + lb2bCartItem.message);
         }
     }
+}
