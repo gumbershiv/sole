@@ -199,4 +199,65 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
         this.showInputForm = false;
 
         refreshCartSummary()
-            .then(() => console.log('
+            .then(() => console.log('Cart summary refreshed'));
+    }
+
+    getMessageForElement(element) {
+        switch (element.message) {
+            case 'ITEM_SUCCESS':
+                return super.labels.msgItemSuccess;
+            case 'ERROR_INVALID_SKU':
+                return super.labels.msgInvalidSku;
+            case 'ERROR_INVALID_QUANTITY':
+                return super.labels.msgInvalidQty;
+            case 'ERROR_DUPLICATE_SKU':
+                return super.labels.msgDuplicateSku;
+            case 'ERROR_QUANTITY_RULES':
+                return String.format(
+                    super.labels.msgInvalidQtyRules,
+                    [element.minimum, element.maximum, element.increment]
+                );
+            case 'ITEM_REMOVED':
+                return super.labels.msgItemRemoved;
+            default:
+                return element.message;
+        }
+    }
+
+    handleAddToCartError(message) {
+        this.showResultTable = false;
+        this.showInputForm = true;
+
+        if (message === 'ERROR_UPLOAD_LIMIT') {
+            message = super.labels.msgUploadLimit;
+        }
+
+        toastUtil.toastError(this, {
+            title: super.labels.labelError,
+            message: message,
+        });
+    }
+
+    startOver() {
+        this.uploadInfo = [];
+        this.inputData = [];
+        this.errors = [];
+        this.tableData = [];
+        this.showFormatError = false;
+        this.isLoading = false;
+        this.showResultTable = false;
+        this.showInputForm = true;
+
+        // Reset file input field
+        const fileInput = this.template.querySelector('[data-id="fileUpload"]');
+        if (fileInput) {
+            fileInput.value = '';
+        }
+
+        // Reset checkbox field
+        const checkbox = this.template.querySelector('[data-id="input-checkbox"]');
+        if (checkbox) {
+            checkbox.checked = false;
+        }
+    }
+}
