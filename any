@@ -1,54 +1,47 @@
 public void insertCartItems(String communityId, String effectiveAccountId, Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap, String cartId) {
-    // Step 1: Prepare all inputs
-    List<ConnectApi.BatchInput> batchInputs = new List<ConnectApi.BatchInput>();
-    List<B2BCartItemDTO> lb2bCartItemList = new List<B2BCartItemDTO>();
-    
-    for (B2BCartItemDTO lb2bcartItem : productIdToLb2bCartItemMap.values()) {
-        batchInputs.add(new ConnectApi.BatchInput(this.convertToCartItemInput(lb2bcartItem)));
-        lb2bCartItemList.add(lb2bcartItem);
-    }
-    
-    Id webstoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);
-    System.debug('Total products to insert: ' + batchInputs.size());
+        List<ConnectApi.BatchInput> batchInputs = new List<ConnectApi.BatchInput>();
+        for (B2BCartItemDTO lb2bcartItem : productIdToLb2bCartItemMap.values()) {
+            batchInputs.add(new ConnectApi.BatchInput(this.convertToCartItemInput(lb2bcartItem)));
+        }
 
-    // Step 2: Split callout into batches of max 500
-    Integer batchSize = 500;
-    List<ConnectApi.BatchResult> allBatchResults = new List<ConnectApi.BatchResult>();
-    Integer totalInputs = batchInputs.size();
-    
-    for (Integer i = 0; i < totalInputs; i += batchSize) {
-        Integer end = Math.min(i + batchSize, totalInputs);
-        List<ConnectApi.BatchInput> subBatchInputs = batchInputs.subList(i, end);
-
-        System.debug('Sending batch from ' + i + ' to ' + (end - 1));
+        Id webstoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);
+        system.debug('batchInputs'+batchInputs);
         
-        List<ConnectApi.BatchResult> batchResults = ConnectApi.CommerceCart.addItemsToCart(
-            webstoreId,
-            effectiveAccountId,
-            cartId,
-            subBatchInputs
+        List<ConnectApi.BatchInput> firstChunk = new List<ConnectApi.BatchInput>();
+        List<ConnectApi.BatchInput> secondChunk = new List<ConnectApi.BatchInput>();
+        
+        for (Integer i = 0; i < Math.min(500, productIdToLb2bCartItemMap.size()); i++) {
+            firstChunk.add(batchInputs[i]);
+        }
+        
+        for (Integer i = 500; i < productIdToLb2bCartItemMap.size(); i++) {
+            secondChunk.add(batchInputs[i]);
+        }
+        
+        System.debug('Total results received: ' + allBatchResults.size());
+
+        /*List<ConnectApi.BatchResult> batchResults = ConnectApi.CommerceCart.addItemsToCart(
+                webstoreId,
+                effectiveAccountId,
+                cartId,
+                batchInputs
         );
-        
-        allBatchResults.addAll(batchResults);
-    }
-    
-    System.debug('Total results received: ' + allBatchResults.size());
 
-    // Step 3: Map results back to original cart items
-    for (Integer index = 0; index < allBatchResults.size(); index++) {
-        ConnectApi.BatchResult batchResult = allBatchResults.get(index);
-        B2BCartItemDTO lb2bCartItem = lb2bCartItemList.get(index);
-        
-        lb2bCartItem.isSuccess = batchResult.isSuccess();
-        
-        if (batchResult.isSuccess()) {
-            ConnectApi.CartItem cartItemOutput = (ConnectApi.CartItem) batchResult.getResult();
-            lb2bCartItem.cartId = cartItemOutput.cartId;
-            lb2bCartItem.cartItemId = cartItemOutput.cartItemId;
-            lb2bCartItem.message = ITEM_SUCCESS;
-        } else {
-            lb2bCartItem.message = this.convertToMessage(batchResult.getErrorMessage());
-            System.debug('Error for product ' + lb2bCartItem + ': ' + lb2bCartItem.message);
+        system.debug('batchResults.size()'+batchResults);*/
+        for (Integer index = 0; index < batchResults.size(); index++) {
+            ConnectApi.BatchResult batchResult = batchResults.get(index);
+            ConnectApi.CartItemInput cartItemInput = (ConnectApi.CartItemInput) batchInputs.get(index).getInput();
+            B2BCartItemDTO lb2bCartItem = productIdToLb2bCartItemMap.values().get(index);
+            lb2bCartItem.isSuccess = batchResult.isSuccess();
+
+            if (batchResult.isSuccess()) {
+                ConnectApi.CartItem cartItemOutput = (ConnectApi.CartItem) batchResult.getResult();
+                lb2bCartItem.cartId = cartItemOutput.cartId;
+                lb2bCartItem.cartItemId = cartItemOutput.cartItemId;
+                lb2bCartItem.message = ITEM_SUCCESS;
+            } else {
+                lb2bCartItem.message = this.convertToMessage(batchResult.getErrorMessage());
+                system.debug('lb2bCartItem.message'+lb2bCartItem.message);
+            }
         }
     }
-}
