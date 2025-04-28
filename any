@@ -1,32 +1,34 @@
-public Map<String, B2bUtilProduct.ProductData> getSkuToProductMap(List<String> skus, Id webstoreId, String effectiveAccountId) {
-    Map<String, B2bUtilProduct.ProductData> skuToProduct2Map = new Map<String, B2bUtilProduct.ProductData>();
-    
-    // Split SKUs into two chunks (assuming the first chunk can hold up to 500 SKUs)
-    List<String> firstChunk = new List<String>();
-    List<String> secondChunk = new List<String>();
+public void insertCartItems(String communityId, String effectiveAccountId, Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap, String cartId) {
+        List<ConnectApi.BatchInput> batchInputs = new List<ConnectApi.BatchInput>();
+        for (B2BCartItemDTO lb2bcartItem : productIdToLb2bCartItemMap.values()) {
+            batchInputs.add(new ConnectApi.BatchInput(this.convertToCartItemInput(lb2bcartItem)));
+        }
 
-    // Ensure that the first chunk has a maximum of 500 SKUs
-    for (Integer i = 0; i < Math.min(500, skus.size()); i++) {
-        firstChunk.add(skus[i]);
+        Id webstoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);
+        system.debug('batchInputs'+batchInputs);
+
+        List<ConnectApi.BatchResult> batchResults = ConnectApi.CommerceCart.addItemsToCart(
+                webstoreId,
+                effectiveAccountId,
+                cartId,
+                batchInputs
+        );
+
+        system.debug('batchResults.size()'+batchResults);
+        for (Integer index = 0; index < batchResults.size(); index++) {
+            ConnectApi.BatchResult batchResult = batchResults.get(index);
+            ConnectApi.CartItemInput cartItemInput = (ConnectApi.CartItemInput) batchInputs.get(index).getInput();
+            B2BCartItemDTO lb2bCartItem = productIdToLb2bCartItemMap.values().get(index);
+            lb2bCartItem.isSuccess = batchResult.isSuccess();
+
+            if (batchResult.isSuccess()) {
+                ConnectApi.CartItem cartItemOutput = (ConnectApi.CartItem) batchResult.getResult();
+                lb2bCartItem.cartId = cartItemOutput.cartId;
+                lb2bCartItem.cartItemId = cartItemOutput.cartItemId;
+                lb2bCartItem.message = ITEM_SUCCESS;
+            } else {
+                lb2bCartItem.message = this.convertToMessage(batchResult.getErrorMessage());
+                system.debug('lb2bCartItem.message'+lb2bCartItem.message);
+            }
+        }
     }
-
-    // The second chunk will have the remaining SKUs if there are more than 500
-    for (Integer i = 500; i < skus.size(); i++) {
-        secondChunk.add(skus[i]);
-    }
-
-    // Fetch product data for the first chunk
-    List<B2bUtilProduct.ProductData> productData = B2bUtilProduct.getProductsBySku(webstoreId, effectiveAccountId, firstChunk, null, true, true, true);
-    
-    // If there are remaining SKUs in the second chunk, fetch them
-    if (!secondChunk.isEmpty()) {
-        productData.addAll(B2bUtilProduct.getProductsBySku(webstoreId, effectiveAccountId, secondChunk, null, true, true, true));
-    }
-
-    // Populate the map with SKU and corresponding product data
-    for (B2bUtilProduct.ProductData product : productData) {
-        skuToProduct2Map.put(B2BUtil.toUpperCase(product.SKU), product);
-    }
-
-    return skuToProduct2Map;
-}
