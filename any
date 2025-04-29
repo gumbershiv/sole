@@ -1,35 +1,20 @@
-import Toast from 'lightning/toast';
+public static void updateProductSequence(Id productCollectionId) {
+    // Step 1: Query items related to the collection
+    List<ProductCollectionItem__c> items = [
+        SELECT Id, Product2__c, Sequence__c
+        FROM ProductCollectionItem__c
+        WHERE ProductCollection__c = :productCollectionId
+        ORDER BY Product2__r.Name ASC
+    ];
 
-const toastError = function (ctx, options) {
-    const { title, message } = options;
-    toastShow(ctx, title, message, 'error' );
-};
+    // Step 2: Assign new sequence numbers
+    Integer counter = 1;
+    for (ProductCollectionItem__c item : items) {
+        item.Sequence__c = counter++;
+    }
 
-const toastSuccess = function (ctx, options) {
-    const { title, message } = options;
-    toastShow(ctx, title, message, 'success');
-};
-
-const toastInfo = function (ctx, options) {
-    const { title, message } = options;
-    toastShow(ctx, title, message, 'info');
-};
-
-const toastWarn = function (ctx, options) {
-    const { title, message } = options;
-    toastShow(ctx, title, message, 'warning');
-};
-
-const toastShow = function (ctx, title, message, variant) {
-    Toast.show(
-        {
-            label: title,
-            message: message,
-            variant: variant,
-            mode: 'pester'
-        },
-        ctx
-    );
-};
-
-export { toastError, toastSuccess, toastInfo, toastWarn };
+    // Step 3: Update the records
+    if (!items.isEmpty()) {
+        update items;
+    }
+}
