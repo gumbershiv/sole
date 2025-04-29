@@ -5,7 +5,7 @@ import { LightningElement, api, track } from 'lwc';
 import communityId from '@salesforce/community/Id';
 
 // Commerce APIs
-import { refreshCartSummary } from 'commerce/cartApi';
+import {refreshCartSummary} from 'commerce/cartApi';
 
 // Apex code
 import addToCart from '@salesforce/apex/B2BBulkProductToCartController.addToCart';
@@ -14,7 +14,9 @@ import addToCart from '@salesforce/apex/B2BBulkProductToCartController.addToCart
 import { PageLabelStoreMixin } from 'c/b2bPageLabelStoreMixin';
 import { toastUtil, dataGrabber } from 'c/b2bUtil';
 
-export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElement) {
+export default class B2BCopyPasteOrder extends PageLabelStoreMixin(
+    LightningElement
+) {
     constructor() {
         super('b2bCopyPasteOrder', true);
     }
@@ -30,6 +32,7 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
 
     tableData = [];
     @track showFormatError = false;
+    @track err;
 
     @api valMaxProductAmount;
 
@@ -44,11 +47,15 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
                 hideDefaultActions: true,
                 label: super.labels.labelQty,
                 fieldName: 'qty',
+                cellAttributes: {
+                    class: { wrapText: false },
+                },
             },
             {
                 hideDefaultActions: true,
                 label: super.labels.labelNotes,
                 fieldName: 'notes',
+                wrapText: true ,
                 cellAttributes: {
                     class: { fieldName: 'notesColor' },
                     wrapText: true,
@@ -56,12 +63,12 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
             },
         ];
     }
-
     async connectedCallback() {
         super.connectedCallback();
     }
 
     validateInputFormat(data) {
+        debugger;
         this.uploadInfo = [];
         this.inputData = [];
         this.errors = [];
@@ -72,16 +79,16 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
         }
 
         const allRows = data.split(/\r?\n/);
-        const expectedHeader = `${super.labels.csvHeaderSkuNumber.trim()},${super.labels.csvHeaderQuantity.trim()}`;
+        const expectedHeader =
+            super.labels.csvHeaderSkuNumber.trim() + ',' + super.labels.csvHeaderQuantity.trim();
         const start = allRows[0].startsWith(expectedHeader) ? 1 : 0;
 
         for (let i = start; i < allRows.length; i++) {
             const rawRow = allRows[i].trim();
-            if (rawRow === '') {
+            if(rawRow === ''){
                 break;
             }
-
-            const cleanedRow = rawRow.includes(',') ? rawRow : rawRow.replace('\t', ',');
+            const cleanedRow = rawRow.includes(',') ?rawRow : rawRow.replace('\t', ',');
             const columns = cleanedRow.split(',');
 
             const lineNumber = i + 1;
@@ -113,7 +120,7 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
             }
         }
     }
-
+    
     async addToCart() {
         const data = this.template.querySelector('[data-id="fileUpload"]')?.value;
         this.validateInputFormat(data);
@@ -121,6 +128,7 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
         if (!this.uploadInfo.length || this.errors.length > 0) {
             this.isLoading = false;
             this.showFormatError = true;
+            this.err = this.errors.join('\n');
             toastUtil.toastError(this, {
                 title: super.labels.labelError,
                 message: this.errors.length > 0 ? this.errors.join('\n') : super.labels.msgNothingTodoError,
@@ -213,10 +221,7 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
             case 'ERROR_DUPLICATE_SKU':
                 return super.labels.msgDuplicateSku;
             case 'ERROR_QUANTITY_RULES':
-                return String.format(
-                    super.labels.msgInvalidQtyRules,
-                    [element.minimum, element.maximum, element.increment]
-                );
+                return super.labels.msgInvalidQtyRules;
             case 'ITEM_REMOVED':
                 return super.labels.msgItemRemoved;
             default:
@@ -237,7 +242,6 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
             message: message,
         });
     }
-
     startOver() {
         this.uploadInfo = [];
         this.inputData = [];
@@ -247,17 +251,6 @@ export default class B2BCopyPasteOrder extends PageLabelStoreMixin(LightningElem
         this.isLoading = false;
         this.showResultTable = false;
         this.showInputForm = true;
-
-        // Reset file input field
-        const fileInput = this.template.querySelector('[data-id="fileUpload"]');
-        if (fileInput) {
-            fileInput.value = '';
-        }
-
-        // Reset checkbox field
-        const checkbox = this.template.querySelector('[data-id="input-checkbox"]');
-        if (checkbox) {
-            checkbox.checked = false;
-        }
+        
     }
 }
