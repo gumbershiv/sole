@@ -1,20 +1,11 @@
-public static void updateProductSequence(Id productCollectionId) {
-    // Step 1: Query items related to the collection
-    List<ProductCollectionItem__c> items = [
-        SELECT Id, Product2__c, Sequence__c
-        FROM ProductCollectionItem__c
-        WHERE ProductCollection__c = :productCollectionId
-        ORDER BY Product2__r.Name ASC
-    ];
+ public Map<String, B2bUtilProduct.ProductData> getSkuToProductMap(List<String> skus, Id webstoreId, String effectiveAccountId) {
+        Map<String, B2bUtilProduct.ProductData> skuToProduct2Map = new Map<String, B2bUtilProduct.ProductData>();
+        List<B2bUtilProduct.ProductData> productData = B2bUtilProduct.getProductsBySku(webStoreId, effectiveAccountId, skus, null, true, true, true); // need to call it twice as l
+        for (B2bUtilProduct.ProductData product : productData) {
+            skuToProduct2Map.put(B2BUtil.toUpperCase(product.SKU), product);
+        }
 
-    // Step 2: Assign new sequence numbers
-    Integer counter = 1;
-    for (ProductCollectionItem__c item : items) {
-        item.Sequence__c = counter++;
+        return skuToProduct2Map;
     }
 
-    // Step 3: Update the records
-    if (!items.isEmpty()) {
-        update items;
-    }
 }
