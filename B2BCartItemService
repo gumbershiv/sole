@@ -1,0 +1,308 @@
+/**
+ * @author      Ting Li
+ * @company     Capgemini
+ * @description This class contains cart item service
+ * @created     2021-08-19
+ * @version     1.0
+ * @since       52.0 (Force.com ApiVersion)
+ */
+public with sharing class B2BCartItemService {
+
+    private static final String CART_CURRENT_STATUS = 'current';
+    private static final String SEPARATOR_SEMICOLON = '; ';
+    private static final String ERROR_INVALID_QUANTITY = 'ERROR_INVALID_QUANTITY';
+    private static final String ERROR_DUPLICATE_SKU = 'ERROR_DUPLICATE_SKU';
+    private static final String ERROR_INVALID_SKU = 'ERROR_INVALID_SKU';
+    private static final String ERROR_QUANTITY_RULES = 'ERROR_QUANTITY_RULES';
+    private static final String ERROR_UPLOAD_LIMIT = 'ERROR_UPLOAD_LIMIT';
+    private static final String ITEM_SUCCESS = 'ITEM_SUCCESS';
+    private static final String ITEM_REMOVED = 'ITEM_REMOVED';
+
+
+    private static final String LB2BCARTITEM_SKU = 'sku';
+    private static final String LB2BCARTITEM_QUANTITY = 'quantity';
+
+    /**
+     * @description This method is used to insert cart items
+     *
+     * @param communityId                   community id
+     * @param productIdToLb2bCartItemMap    mapping of product id to lb2b cart item
+     * 
+     */
+    public void insertCartItems(String communityId, String effectiveAccountId, Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap, String cartId) {
+        List<ConnectApi.BatchInput> batchInputs = new List<ConnectApi.BatchInput>();
+        for (B2BCartItemDTO lb2bcartItem : productIdToLb2bCartItemMap.values()) {
+            batchInputs.add(new ConnectApi.BatchInput(this.convertToCartItemInput(lb2bcartItem)));
+        }
+
+        Id webstoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);
+
+        List<ConnectApi.BatchResult> batchResults = ConnectApi.CommerceCart.addItemsToCart(
+                webstoreId,
+                effectiveAccountId,
+                cartId,
+                batchInputs
+        );
+
+        for (Integer index = 0; index < batchResults.size(); index++) {
+            ConnectApi.BatchResult batchResult = batchResults.get(index);
+            ConnectApi.CartItemInput cartItemInput = (ConnectApi.CartItemInput) batchInputs.get(index).getInput();
+            B2BCartItemDTO lb2bCartItem = productIdToLb2bCartItemMap.values().get(index);
+            lb2bCartItem.isSuccess = batchResult.isSuccess();
+
+            if (batchResult.isSuccess()) {
+                ConnectApi.CartItem cartItemOutput = (ConnectApi.CartItem) batchResult.getResult();
+                lb2bCartItem.cartId = cartItemOutput.cartId;
+                lb2bCartItem.cartItemId = cartItemOutput.cartItemId;
+                lb2bCartItem.message = ITEM_SUCCESS;
+            } else {
+                lb2bCartItem.message = this.convertToMessage(batchResult.getErrorMessage());
+            }
+        }
+    }
+
+    /**
+     * @description This method is used to group cart items when size greater than 100 
+     *
+     * @param communityId                   community id
+     * @param productIdToLb2bCartItemMap    mapping of product id to lb2b cart item
+     * 
+     */
+
+    public void insertCartItemsBulk(String communityId, String effectiveAccountId, String cartId, Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap, Integer cartItemLimit) {
+        Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMapNew = new Map<Id, B2BCartItemDTO>();
+
+        if (productIdToLb2bCartItemMap.size() > cartItemLimit) {
+            throw new B2BException(ERROR_UPLOAD_LIMIT);
+        }
+
+        Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMapPer = new Map<Id, B2BCartItemDTO>();
+        Integer count = 0;
+
+        for (String key : productIdToLb2bCartItemMap.keySet()) {
+            count++;
+            productIdToLb2bCartItemMapPer.put(key, productIdToLb2bCartItemMap.get(key));
+
+            if (Math.mod(count, 100) == 0) {
+                insertCartItems(communityId, effectiveAccountId, productIdToLb2bCartItemMapPer, cartId);
+                productIdToLb2bCartItemMapNew.putAll(productIdToLb2bCartItemMapPer);
+                productIdToLb2bCartItemMapPer = new Map<Id, B2BCartItemDTO>();
+            }
+
+            if (count == productIdToLb2bCartItemMap.size() && Math.mod(count, 100) != 0) {
+                insertCartItems(communityId, effectiveAccountId, productIdToLb2bCartItemMapPer, cartId);
+                productIdToLb2bCartItemMapNew.putAll(productIdToLb2bCartItemMapPer);
+            }
+        }
+
+        productIdToLb2bCartItemMap = productIdToLb2bCartItemMapNew;
+        //check sie here and remove extra items ??
+
+    }
+
+    /**
+     * @description This method is used to update cart items
+     *
+     * @param productIdToLb2bCartItemMap    mapping of product id to lb2b cart item
+     * 
+     */
+    public void updateCartItems(Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap) {
+        List<CartItem> cartItems = new List<CartItem>();
+        for (B2BCartItemDTO lb2bCartItem : productIdToLb2bCartItemMap.values()) {
+            if (!String.isBlank(lb2bCartItem.cartItemId)) {
+                cartItems.add(this.convertToCartItem(lb2bCartItem));
+            }
+        }
+
+        List<Database.SaveResult> saveResults = Database.update(cartItems, false);
+        for (Integer index = 0; index < saveResults.size(); index++) {
+            Database.SaveResult saveResult = saveResults.get(index);
+            Id productId = cartItems.get(index).Product2Id;
+            B2BCartItemDTO lb2bCartItem = productIdToLb2bCartItemMap.get(productId);
+
+            lb2bCartItem.isSuccess = saveResult.isSuccess();
+
+            if (saveResult.isSuccess()) {
+                lb2bCartItem.message = ITEM_SUCCESS;
+            } else {
+                lb2bCartItem.message = this.convertToMessage(saveResult.getErrors());
+            }
+        }
+    }
+
+
+    /**
+     * @description This method is used to get valid product id to lb2b cart item
+     *
+     * @param lb2bCartItems     list of lb2b cart item
+     * @param skuToProductMap   mapping of sku to product
+     * @param needToVerifyPrice boolean
+     * 
+     * @return mapping sku tp lb2b cart item
+     */
+    public Map<Id, B2BCartItemDTO> getValidProductIdToLb2bCartItemMap(
+            List<B2BCartItemDTO> lb2bCartItems,
+            Map<String, B2bUtilProduct.productData> skuToProductMap) {
+
+        Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap = new Map<Id, B2BCartItemDTO>();
+        Map<String, B2BCartItemDTO> existSkuMap = new Map<String, B2BCartItemDTO>();
+
+        for (B2BCartItemDTO lb2bCartItem : lb2bCartItems) {
+            String uppercaseSku = B2BUtil.toUpperCase(lb2bCartItem.sku);
+
+            if (String.isNotBlank(uppercaseSku) && existSkuMap.containsKey(uppercaseSku)) {
+                lb2bCartItem.isSuccess = false;
+                lb2bCartItem.message = ERROR_DUPLICATE_SKU;
+
+                String itemIndex = '';
+                if (existSkuMap.get(uppercaseSku).index != null) {
+                    itemIndex = String.valueOf(existSkuMap.get(uppercaseSku).index);
+                }
+                lb2bCartItem.setFieldError(LB2BCARTITEM_SKU, ERROR_DUPLICATE_SKU);
+
+            }
+
+            existSkuMap.put(uppercaseSku, lb2bCartItem);
+
+            verifyLb2bCartItemQty(lb2bCartItem, skuToProductMap.get(uppercaseSku));
+
+            if (!skuToProductMap.containsKey(uppercaseSku)) {
+                system.debug('invalid');
+                lb2bCartItem.isSuccess = false;
+                lb2bCartItem.message = ERROR_INVALID_SKU;
+                lb2bCartItem.setFieldError(LB2BCARTITEM_SKU, ERROR_INVALID_SKU);
+            }
+
+            if (lb2bCartItem.isSuccess == null) {
+                system.debug('succcceess');
+                lb2bCartItem.productId = skuToProductMap.get(uppercaseSku).Id;
+                productIdToLb2bCartItemMap.put(lb2bCartItem.productId, lb2bCartItem);
+            }
+        }
+
+        return productIdToLb2bCartItemMap;
+    }
+
+    /**
+     * @description This method is used to convert list of lb2b cart item into mapping sku tp lb2b cart item
+     *
+     * @param lb2bCartItems     list of lb2b cart item
+     * 
+     * @return mapping sku tp lb2b cart item
+     */
+    public Map<String, B2BCartItemDTO> convertToSkuToLb2bCartItemMap(List<B2BCartItemDTO> lb2bCartItems) {
+        Map<String, B2BCartItemDTO> skuTolb2bCartItemMap = new Map<String, B2BCartItemDTO>();
+
+        for (B2BCartItemDTO lb2bCartItem : lb2bCartItems) {
+            skuTolb2bCartItemMap.put(B2BUtil.toUpperCase(lb2bCartItem.sku), lb2bCartItem);
+        }
+
+        return skuTolb2bCartItemMap;
+    }
+
+
+    public void validateAndReduceCartItemCount(
+            String cartId,
+            Integer cartItemLimit,
+            Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap) {
+        WebCart wc = [SELECT Id, TotalProductCount FROM WebCart WHERE Id = :cartId];
+        if (wc.TotalProductCount <= cartItemLimit) {
+            //nothing to do.  Cart limit is OK
+            return;
+        }
+        List<CartItem> cartItems = [SELECT Id, Sku, Product2Id, Quantity FROM CartItem WHERE CartId = :cartId ORDER BY LastModifiedDate LIMIT 2000 OFFSET :cartItemLimit ];
+
+        Set<Id> ciToDelete = new Set<Id>();
+        for (CartItem ci : cartItems) {
+            B2BCartItemDTO ciDto = productIdToLb2bCartItemMap.get(ci.Product2Id);
+            ciToDelete.add(ci.Id);
+            ciDto.quantity = Integer.valueOf(ci.Quantity);
+            ciDto.message = ITEM_REMOVED;
+            ciDto.isSuccess = false;
+        }
+        delete [SELECT Id FROM CartItem WHERE Id IN :ciToDelete];
+    }
+
+    /**
+     * @description This method is used to verify lb2b cart item quantity whether valid
+     *
+     * @param lb2bCartItem      lb2b cart item
+     * @param product           product
+     */
+    private static void verifyLb2bCartItemQty(B2BCartItemDTO lb2bCartItem, B2bUtilProduct.productData product) {
+        if(lb2bCartItem.quantity != null && lb2bCartItem.quantity > product.purchaseLimit){
+            lb2bCartItem.isSuccess = false;
+            lb2bCartItem.message = ERROR_INVALID_QUANTITY;
+            lb2bCartItem.setFieldError(LB2BCARTITEM_QUANTITY, ERROR_INVALID_QUANTITY);
+        }
+    }
+
+
+    /**
+     * @description This method is used to convert database error into error message string
+     *
+     * @param errors    list of database error
+     * 
+     * @return error message
+     */
+    private String convertToMessage(List<Database.Error> errors) {
+        List<String> errorMessages = new List<String>();
+        for (Database.Error error : errors) {
+            System.debug(LoggingLevel.INFO, '*** error.getMessage(): ' + error.getMessage());
+            errorMessages.add(error.getMessage());
+        }
+
+        return this.convertToMessage(String.join(errorMessages, SEPARATOR_SEMICOLON));
+    }
+
+    /**
+     * @description This method is used to convert error message optimization
+     *
+     * @param error    error string
+     * 
+     * @return error message
+     */
+    private String convertToMessage(String error) {
+        if (String.isBlank(error)) {
+            return error;
+        }
+
+        if (error.contains(ERROR_INVALID_QUANTITY)) {
+            error = ERROR_INVALID_QUANTITY;
+        }
+
+        return error;
+    }
+
+    /**
+     * @description This method is used to convert lb2b cart item into cart item input
+     *
+     * @param lb2bCartItem  lb2b cart item
+     * 
+     * @return connect api cart item input
+     */
+    private ConnectApi.CartItemInput convertToCartItemInput(B2BCartItemDTO lb2bCartItem) {
+        ConnectApi.CartItemInput cartItemInput = new ConnectApi.CartItemInput();
+        cartItemInput.productId = lb2bCartItem.productId;
+        cartItemInput.quantity = String.valueOf(lb2bCartItem.quantity);
+        cartItemInput.type = ConnectApi.CartItemType.PRODUCT;
+
+        return cartItemInput;
+    }
+
+    /**
+     * @description This method is used to convert lb2b cart item into cart item
+     *
+     * @param lb2bCartItem  lb2b cart item
+     * 
+     * @return cart item
+     */
+    private CartItem convertToCartItem(B2BCartItemDTO lb2bCartItem) {
+        CartItem cartItem = new CartItem();
+        cartItem.Id = lb2bCartItem.cartItemId;
+        cartItem.Product2Id = lb2bCartItem.productId;
+
+        return cartItem;
+    }
+
+}
