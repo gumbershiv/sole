@@ -1,0 +1,75 @@
+public with sharing class B2BBulkProductToCartController {
+    private static final String ACTION_SUCCESS = 'Success';
+
+    private static B2BProductService productService = new B2BProductService();
+
+    private static B2BCartItemService cartItemService = new B2BCartItemService();
+
+
+    /**
+     * Process to add bulk items to the cart.
+     * @param data String (JSON String List of sku, quantity)
+     * @param communityId String (typical data, communityId is required)
+     * @param effectiveAccountId String (For account switcher and to know which account is getting impacted)
+     * @param isChecked Boolean (true: make a new cart, false: append to current cart)
+     * @param cartItemLimit Integer (The maximum items you will allow in the cart)
+     *
+     * @return  B2BActionResponse
+     */
+    @AuraEnabled
+    public static B2BActionResponse addToCart(
+        String data,
+        String communityId,
+        String effectiveAccountId,
+        String isChecked,
+        Integer cartItemLimit) {
+            if(String.isBlank(effectiveAccountId)){
+                effectiveAccountId = B2BUtil.getEffectiveAccountId();
+            }
+            B2BActionResponse actionResponse;
+            String cartId;
+            System.debug(LoggingLevel.INFO, '*** data: ' + data);
+            
+            try {
+                Id webstoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);
+                ConnectApi.CartSummary currentCart;
+                currentCart = ConnectApi.CommerceCart.getOrCreateActiveCartSummary(webstoreId, effectiveAccountId, 'current');
+                cartId = currentCart.cartId;
+                if (isChecked == 'true') {
+                    system.debug('isChecked' + isChecked);
+                    ConnectApi.CommerceCart.deleteCart(webstoreId, effectiveAccountId, currentCart.cartId);
+                    
+                    ConnectApi.CartInput input = new ConnectApi.CartInput();
+                    system.debug('input' + input);
+                    input.effectiveAccountId = id.valueof(effectiveAccountId);
+                    
+                    currentCart = ConnectApi.CommerceCart.createCart(webstoreId, input);
+                    cartId = currentCart.cartId;
+                }
+                
+                List<B2BCartItemDTO> lb2bCartItems = (List<B2BCartItemDTO>) JSON.deserialize(data, List<B2BCartItemDTO>.class);
+                system.debug('lb2bCartItems'+lb2bCartItems);
+                
+                Map<String, B2BCartItemDTO> skuToCartItemMap = cartItemService.convertToSkuToLb2bCartItemMap(lb2bCartItems);
+                
+                Map<String, B2bUtilProduct.ProductData> skuToProductMap = productService.getSkuToProductMap(new List<String>(skuToCartItemMap.keySet()), webstoreId , effectiveAccountId);
+                
+                system.debug('skuToProductMap'+skuToProductMap);
+                Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap = cartItemService.getValidProductIdToLb2bCartItemMap(lb2bCartItems, skuToProductMap);
+                
+                System.debug(LoggingLevel.INFO, '*** productIdToLb2bCartItemMap: ' + productIdToLb2bCartItemMap);
+                cartItemService.insertCartItemsBulk(communityId, effectiveAccountId, cartId, productIdToLb2bCartItemMap, cartItemLimit);
+                
+                cartItemService.validateAndReduceCartItemCount(cartId, cartItemLimit,  productIdToLb2bCartItemMap);
+                
+                //lb2bCartItems data gets updated in the above classes through reference data
+                actionResponse = new B2BActionResponse(true, ACTION_SUCCESS, lb2bCartItems);
+                
+            } catch (Exception e) {
+                System.debug(LoggingLevel.INFO, '*** e.getMessage(): ' + e.getStackTraceString());
+                actionResponse = new B2BActionResponse(false, e.getMessage(), null);
+            }
+            
+            return actionResponse;
+        }
+}
