@@ -1,0 +1,47 @@
+@isTest
+public with sharing class B2BBulkProductToCartControllerTest {
+    private static Id effectiveAccountId;
+    private static Account testAccount;
+    private static Contact testContact;
+    private static User testUser;
+    private static Network communityId;
+
+    public static void setupData(Integer productCount) {
+        // Create test account
+        testAccount = B2B_TestDataFactory.createAccount(false);
+        testAccount.BillingCountry = 'United States';
+        testAccount.Account_Status__c = 'Verified';
+        testAccount.ST_Business_Partner_Code__c = null;
+        insert testAccount;
+        
+        // Create test contact and user
+        testContact = B2B_TestDataFactory.createContact(testAccount);
+        testUser = B2B_TestDataFactory.createCommunityUser(testContact, 'testUser@test.com');
+        
+        // Create testProducts based on productCount
+        List<Product2> products = new List<Product2>();
+            for (Integer i = 0; i<productCount;i++) {
+                products.add(B2B_TestDataFactory.createProduct2('Test Product'+ i, 'test_p' + i, false));
+            }
+            insert products;
+        
+        communityId = B2B_TestDataFactory.getNetwork();
+       
+    }
+    
+    @IsTest(SeeAllData = true)
+    private static void testAddToCartWithNormalData() {
+        setupData(2);
+        System.runAs(testUser) {
+            Test.startTest();
+            String dataSet = '[{"sku":"test_p1","quantity":"6"},{"sku":"test_p2","quantity":"3"}]';
+            
+            B2BActionResponse result = B2BBulkProductToCartController.addToCart(dataSet, string.valueOf(communityId.id), '001o000000lz4ug', 'false', 500);
+            
+            List<B2BCartItemDTO> resultItems = (List<B2BCartItemDTO>) result.data;
+            Test.stopTest();
+            System.assertEquals(2, resultItems.size());
+            
+        }
+    }
+}
