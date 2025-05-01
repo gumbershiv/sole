@@ -1,0 +1,239 @@
+@isTest
+public with sharing class B2BCartItemServiceTest {
+    private static User buyerUser;
+
+    private static String communityId;
+
+    private static B2BProductService productService = new B2BProductService();
+
+    private static B2BCartItemService cartItemService = new B2BCartItemService();
+
+    private static void setupData() {
+        B2B_TestDataFactory.initBaseData();
+        //B2BDataSetup.productCount = 120;
+        //B2BDataSetup.initStoreData();
+
+        buyerUser = B2BDataSetup.mapUsers.get('testUser@test.com');
+        system.debug('buyerUser'+buyerUser);
+        communityId = B2BDataSetup.communityId;
+        WebStore webStore = B2B_TestDataFactory.createWebStore();
+
+
+        Map<String, Product2> skuToProductMap = new Map<String, Product2>();
+        for (Product2 product : [SELECT Id, StockKeepingUnit FROM Product2 WHERE StockKeepingUnit LIKE 'test_p%']) {
+            skuToProductMap.put(product.StockKeepingUnit, product);
+        }
+    }
+
+    @IsTest(SeeAllData = true)
+    private static void testInsertCartItems() {
+        setupData();
+
+        Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap = new Map<Id, B2BCartItemDTO>();
+        Product2 product = B2BDataSetup.mapProducts.get('test_p1');
+
+        B2BCartItemDTO cartItem = new B2BCartItemDTO();
+        cartItem.sku = 'test_p1';
+        cartItem.quantity = 1;
+        cartItem.expectedUnitPrice = 100;
+        cartItem.productId = product.Id;
+        productIdToLb2bCartItemMap.put(product.Id, cartItem);
+
+        System.runAs(buyerUser) {
+
+            Test.startTest();
+
+            cartItemService.insertCartItems(communityId, null, productIdToLb2bCartItemMap, 'current');
+
+            Test.stopTest();
+
+        }
+
+        System.assert(cartItem.isSuccess, 'cartItem isSuccess should be true');
+    }
+
+    @IsTest(SeeAllData = true)
+    private static void testInsertCartItemsBulk() {
+        setupData();
+
+        List<B2BCartItemDTO> lb2bCartItems = new List<B2BCartItemDTO>();
+        for (Integer i = 1; i < 120; i++) {
+            B2BCartItemDTO cartItem = new B2BCartItemDTO();
+            cartItem.sku = 'test_p' + i;
+            cartItem.quantity = 1;
+            cartItem.expectedUnitPrice = 100;
+
+            lb2bCartItems.add(cartItem);
+        }
+
+        //Map<String, B2BCartItemDTO> skuToCartItemMap = cartItemService.convertToSkuToLb2bCartItemMap(lb2bCartItems);
+        //Map<String, Product2> skuToProductMap = productService.getSkuToProductMap(new List<String>(skuToCartItemMap.keySet()), webStore.id , string.valueof(buyerUser.AccountId) );
+        //Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap = cartItemService.getValidProductIdToLb2bCartItemMap(lb2bCartItems, skuToProductMap);
+
+        System.runAs(buyerUser) {
+
+            Test.startTest();
+
+            //cartItemService.insertCartItemsBulk(communityId, null, 'current', productIdToLb2bCartItemMap, 500);
+
+            Test.stopTest();
+
+        }
+
+        //for (B2BCartItemDTO cartItem : productIdToLb2bCartItemMap.values()) {
+          //  System.assert(cartItem.isSuccess, 'cartItem isSuccess should be true');
+        //}
+    }
+
+    @IsTest(seeAllData=true)
+    private static void testupdateCartItems() {
+        setupData();
+
+        String webstoreId = B2BDataSetup.webStoreId;
+        Account testAcc = B2BDataSetup.mapAccounts.get('Account 1');
+        Product2 testprod1 = B2BDataSetup.mapProducts.get('test_p1');
+        Product2 testprod2 = B2BDataSetup.mapProducts.get('test_p2');
+        List<B2BCartItemDTO> lb2bCartItems = new List<B2BCartItemDTO>();
+
+        WebCart testWebCart = B2BDataSetup.createWebCart('TestWebCart', webstoreId, testAcc);
+        insert testWebCart;
+
+        CartDeliveryGroup cdg = B2BDataSetup.createCartDeliveryGroup(testWebCart);
+
+        CartItem cartItem1 = B2BDataSetup.createCartItem(cdg, testWebCart, testprod1);
+        insert cartItem1;
+
+        CartItem cartItem2 = B2BDataSetup.createCartItem(cdg, testWebCart, testprod2);
+        insert cartItem2;
+
+        B2BCartItemDTO cartItemPer1 = new B2BCartItemDTO();
+        cartItemPer1.sku = 'test_p1';
+        cartItemPer1.quantity = 1;
+        cartItemPer1.expectedUnitPrice = 100;
+        cartItemPer1.productId = testprod1.Id;
+        cartItemPer1.cartItemId = cartItem1.Id;
+
+        B2BCartItemDTO cartItemPer2 = new B2BCartItemDTO();
+        cartItemPer2.sku = 'test_p2';
+        cartItemPer2.quantity = 10;
+        cartItemPer2.expectedUnitPrice = 100;
+        cartItemPer2.productId = testprod2.Id;
+        cartItemPer2.cartItemId = cartItem2.Id;
+
+        lb2bCartItems.add(cartItemPer1);
+        lb2bCartItems.add(cartItemPer2);
+
+        Product2 product = B2BDataSetup.mapProducts.get('test_p2');
+
+        PurchaseQuantityRule purchaseRule = B2BDataSetup.createPurchaseQuantityRule('quantity rule 1', 3.0, 120.0, 3.0);
+        B2BDataSetup.createProductQuantityRule(product.Id, purchaseRule.Id);
+
+        Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap = new Map<Id, B2BCartItemDTO>();
+        productIdToLb2bCartItemMap.put(testprod1.Id, lb2bCartItems[0]);
+        productIdToLb2bCartItemMap.put(testprod2.Id, lb2bCartItems[1]);
+
+        System.runAs(buyerUser) {
+
+            Test.startTest();
+
+            CartItemService.updateCartItems(productIdToLb2bCartItemMap);
+
+            Test.stopTest();
+        }
+
+        System.assertEquals(true, lb2bCartItems[0].isSuccess);
+        System.assertEquals(false, lb2bCartItems[1].isSuccess);
+    }
+
+    @IsTest
+    private static void testConvertToSkuToLb2bCartItemMap() {
+        setupData();
+
+        List<B2BCartItemDTO> lb2bCartItems = new List<B2BCartItemDTO>();
+        B2BCartItemDTO lb2bCartItem1 = new B2BCartItemDTO();
+        lb2bCartItem1.sku = 'test_p1';
+        lb2bCartItem1.quantity = 1;
+        lb2bCartItems.add(lb2bCartItem1);
+
+        B2BCartItemDTO lb2bCartItem2 = new B2BCartItemDTO();
+        lb2bCartItem2.sku = 'test_p2';
+        lb2bCartItem2.quantity = 1;
+        lb2bCartItems.add(lb2bCartItem2);
+
+        B2BCartItemDTO lb2bCartItem3 = new B2BCartItemDTO();
+        lb2bCartItem3.sku = 'invalidSku';
+        lb2bCartItem3.quantity = 1;
+        lb2bCartItems.add(lb2bCartItem3);
+
+        B2BCartItemDTO lb2bCartItem4 = new B2BCartItemDTO();
+        lb2bCartItem4.sku = '';
+        lb2bCartItem4.quantity = 1;
+        lb2bCartItems.add(lb2bCartItem4);
+
+        Map<String, B2BCartItemDTO> skuTolb2bCartItemMap;
+        System.runAs(buyerUser) {
+
+            Test.startTest();
+
+            skuTolb2bCartItemMap = cartItemService.convertToSkuToLb2bCartItemMap(lb2bCartItems);
+
+            Test.stopTest();
+
+        }
+
+        System.assertEquals(4, skuTolb2bCartItemMap.size(), 'skuTolb2bCartItemMap size should be 4');
+        System.assert(skuTolb2bCartItemMap.containsKey('TEST_P1'), 'skuTolb2bCartItemMap should contains key \'TEST_P1\'');
+        System.assert(skuTolb2bCartItemMap.containsKey('TEST_P2'), 'skuTolb2bCartItemMap should contains key \'TEST_P2\'');
+        System.assert(skuTolb2bCartItemMap.containsKey('INVALIDSKU'), 'skuTolb2bCartItemMap should contains key \'INVALIDSKU\'');
+        System.assert(skuTolb2bCartItemMap.containsKey(''), 'skuTolb2bCartItemMap should contains key blank');
+    }
+
+    @IsTest
+    private static void testGetValidProductIdToLb2bCartItemMap() {
+        setupData();
+
+        List<B2BCartItemDTO> lb2bCartItems = new List<B2BCartItemDTO>();
+        B2BCartItemDTO lb2bCartItem1 = new B2BCartItemDTO();
+        lb2bCartItem1.sku = 'test_p1';
+        lb2bCartItem1.quantity = 1;
+        lb2bCartItem1.increment = 1;
+        lb2bCartItem1.expectedUnitPrice = 100;
+        lb2bCartItems.add(lb2bCartItem1);
+
+        B2BCartItemDTO lb2bCartItem2 = new B2BCartItemDTO();
+        lb2bCartItem2.sku = 'test_p2';
+        lb2bCartItem2.quantity = 1;
+        lb2bCartItems.add(lb2bCartItem2);
+
+        B2BCartItemDTO lb2bCartItem3 = new B2BCartItemDTO();
+        lb2bCartItem3.sku = 'invalidSku';
+        lb2bCartItem3.quantity = 1;
+        lb2bCartItems.add(lb2bCartItem3);
+
+        B2BCartItemDTO lb2bCartItem4 = new B2BCartItemDTO();
+        lb2bCartItem4.sku = '';
+        lb2bCartItem4.quantity = 1;
+        lb2bCartItems.add(lb2bCartItem4);
+
+        Map<String, Product2> skuToProductMap = new Map<String, Product2>();
+        for (Product2 product : [SELECT Id, StockKeepingUnit FROM Product2 WHERE StockKeepingUnit LIKE 'test_%']) {
+            skuToProductMap.put(B2BUtil.toUppercase(product.StockKeepingUnit), product);
+        }
+
+        Map<Id, B2BCartItemDTO> productIdTolb2bCartItemMap;
+        System.runAs(buyerUser) {
+
+            Test.startTest();
+
+            //productIdTolb2bCartItemMap = cartItemService.getValidProductIdToLb2bCartItemMap(lb2bCartItems, skuToProductMap);
+
+            Test.stopTest();
+
+        }
+
+        //System.assertEquals(2, productIdTolb2bCartItemMap.size(), 'productIdTolb2bCartItemMap size should be 2');
+        //System.assert(productIdTolb2bCartItemMap.containsKey(skuToProductMap.get('TEST_P1').Id), 'skuTolb2bCartItemMap should contains key TEST_P1 product id');
+        //System.assert(productIdTolb2bCartItemMap.containsKey(skuToProductMap.get('TEST_P2').Id), 'skuTolb2bCartItemMap should contains key TEST_P2 product id');
+    }
+
+}
