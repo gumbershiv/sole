@@ -1,0 +1,577 @@
+/**
+ * Created by stroxell on 4/18/2025.
+ */
+@IsTest
+public with sharing class B2BUtilProductTest {
+    public static List<String> skusToPullForTest;
+    public static String MOCK_TEST_FINAL_PART_NEEDS_RESOLVED = '[{"uomqty":"1","uomMessage":"Each","uom":"Each","unitprice":77.13,"stockStatus":"In Stock","sku":"T-1053237-3","sellable":true,"purchaseLimit":10,"listprice":77.13,"leadTime":"137","inventoryAvailable":10,"instock":true,"insalecategory":false,"finalPart":"T-1415171-3","fields":{"StockKeepingUnit":"T-1053237-3","Name":"T-1053237-3","Description":"Cable Tray, 2 Inch, 3 Ft Long"},"currencyCode":"USD","backorderable":false},{"uomqty":"1","uomMessage":"Each","uom":"Each","unitprice":1363.80,"stockStatus":"In Stock","sku":"T-151082-2","sellable":true,"purchaseLimit":1,"listprice":1363.80,"leadTime":"83","inventoryAvailable":1,"instock":true,"insalecategory":false,"finalPart":"T-1914970-1","fields":{"StockKeepingUnit":"T-151082-2","Name":"T-151082-2","Description":"Pump/gear, Seal Oil"},"currencyCode":"USD","backorderable":false},{"uomqty":"1","uomMessage":"Each","uom":"Each","unitprice":1363.80,"stockStatus":"In Stock","sku":"T-no-inventory-final","sellable":true,"purchaseLimit":1,"listprice":1363.80,"leadTime":"83","inventoryAvailable":1,"instock":true,"insalecategory":false,"finalPart":"T-no-inv","fields":{"StockKeepingUnit":"T-no-inventory-final","Name":"T-no-inventory-final","Description":"The final part has no inventory"},"currencyCode":"USD","backorderable":false},{"uomqty":"1","uomMessage":"Each","uom":"Each","unitprice":1363.80,"stockStatus":"In Stock","sku":"T-no-product-final","sellable":true,"purchaseLimit":1,"listprice":1363.80,"leadTime":"83","inventoryAvailable":1,"instock":true,"insalecategory":false,"finalPart":"T-no-product","fields":{"StockKeepingUnit":"T-no-product-final","Name":"T-no-product-final","Description":"The final part has no product"},"currencyCode":"USD","backorderable":false}]';
+
+    static Integer s_num = 1;
+    public static String getFakeId(Schema.SObjectType sot) {
+        String result = String.valueOf(s_num++);
+        return sot.getDescribe().getKeyPrefix() + '0'.repeat(12-result.length()) + result;
+    }
+
+    @TestSetup
+    private static void datasetup () {
+        /*
+            Products that are created during this test class.  Products on one line represent the supersession chain
+            T-151082-1 --> T-151082-2 --> T-1075764-1 --> T-1914970-1 --> T-1914970-1
+            T-1053237-3 --> T-1415171-3
+            T-no-inventory-final --> T-no-inv
+            T-no-product-final
+         */
+        List<Product2> products = new List<Product2>();
+        products.add(B2B_TestDataFactory.createProduct2('T-151082-2', 'T-151082-2', false));
+        products.add(B2B_TestDataFactory.createProduct2('T-1075764-1', 'T-1075764-1', false));
+        products.add(B2B_TestDataFactory.createProduct2('T-1914970-1', 'T-1914970-1', false));
+        products.add(B2B_TestDataFactory.createProduct2('T-1053237-3', 'T-1053237-3', false));
+        products.add(B2B_TestDataFactory.createProduct2('T-1415171-3', 'T-1415171-3', false));
+
+        products.add(B2B_TestDataFactory.createProduct2('T-no-inventory-final', 'T-no-inventory-final', false));
+        products.add(B2B_TestDataFactory.createProduct2('T-no-inv', 'T-no-inv', false));
+
+        products.add(B2B_TestDataFactory.createProduct2('T-no-product-final', 'T-no-product-final', false));
+        products.add(B2B_TestDataFactory.createProduct2('T-151082-1', 'T-151082-1', false));
+
+
+        products.get(0).B2B_CHAINED_PARTS__c = 'T-1075764-1,T-1914970-1';
+        products.get(0).B2B_FINAL_REPLACED_BY__c = 'T-1914970-1';
+        products.get(0).B2B_PRICE__c = 100;
+        products.get(0).B2B_LEAD_TIME__c = '50';
+        products.get(0).B2B_UNITS__c = 'EA';
+        products.get(0).B2B_PACK_QUANTITY__c = 1;
+
+
+        products.get(1).B2B_CHAINED_PARTS__c = 'T-1914970-1';
+        products.get(1).B2B_FINAL_REPLACED_BY__c = 'T-1914970-1';
+        products.get(1).B2B_PRICE__c = 100;
+        products.get(1).B2B_LEAD_TIME__c = '50';
+        products.get(1).B2B_UNITS__c = 'EA';
+        products.get(1).B2B_PACK_QUANTITY__c = 1;
+
+        products.get(2).B2B_CHAINED_PARTS__c = '';
+        products.get(2).B2B_FINAL_REPLACED_BY__c = '';
+        products.get(2).B2B_PRICE__c = 100;
+        products.get(2).B2B_LEAD_TIME__c = '50';
+        products.get(2).B2B_UNITS__c = 'EA';
+        products.get(2).B2B_PACK_QUANTITY__c = 1;
+
+
+        products.get(3).B2B_CHAINED_PARTS__c = 'T-1415171-3';
+        products.get(3).B2B_FINAL_REPLACED_BY__c = 'T-1415171-3';
+        products.get(3).B2B_PRICE__c = 100;
+        products.get(3).B2B_LEAD_TIME__c = '50';
+        products.get(3).B2B_UNITS__c = 'EA';
+        products.get(3).B2B_PACK_QUANTITY__c = 1;
+
+
+        products.get(4).B2B_CHAINED_PARTS__c = '';
+        products.get(4).B2B_FINAL_REPLACED_BY__c = '';
+        products.get(4).B2B_PRICE__c = 100;
+        products.get(4).B2B_LEAD_TIME__c = '50';
+        products.get(4).B2B_UNITS__c = 'EA';
+        products.get(4).B2B_PACK_QUANTITY__c = 1;
+
+        products.get(5).B2B_CHAINED_PARTS__c = 'T-no-inv';
+        products.get(5).B2B_FINAL_REPLACED_BY__c = 'T-no-inv';
+        products.get(5).B2B_PRICE__c = 100;
+        products.get(5).B2B_LEAD_TIME__c = '50';
+        products.get(5).B2B_UNITS__c = 'EA';
+        products.get(5).B2B_PACK_QUANTITY__c = 1;
+
+        products.get(6).B2B_CHAINED_PARTS__c = '';
+        products.get(6).B2B_FINAL_REPLACED_BY__c = '';
+        products.get(6).B2B_PRICE__c = 100;
+        products.get(6).B2B_LEAD_TIME__c = '50';
+        products.get(6).B2B_UNITS__c = 'EA';
+        products.get(6).B2B_PACK_QUANTITY__c = 1;
+
+        products.get(7).B2B_CHAINED_PARTS__c = 'T-no-product';
+        products.get(7).B2B_FINAL_REPLACED_BY__c = 'T-no-product';
+        products.get(7).B2B_PRICE__c = 100;
+        products.get(7).B2B_LEAD_TIME__c = '50';
+        products.get(7).B2B_UNITS__c = 'EA';
+        products.get(7).B2B_PACK_QUANTITY__c = 1;
+
+        products.get(8).B2B_CHAINED_PARTS__c = 'T-151082-2';
+        products.get(8).B2B_FINAL_REPLACED_BY__c = 'T-1914970-1';
+        products.get(8).B2B_PRICE__c = 100;
+        products.get(8).B2B_LEAD_TIME__c = '50';
+        products.get(8).B2B_UNITS__c = 'EA';
+        products.get(8).B2B_PACK_QUANTITY__c = 1;
+
+        insert products;
+        String msgUUID = B2BMessageQueueUtils.saveInboundMessage('Inventory Update', new Map<String, String> {'a'=>'a'}, 'POST', new Map<String, String>(),  null, Blob.valueOf('Test'), null);
+        B2BAPI_InventoryUpdate.InvStatusUpdateResponseWrapper invWrapper = new B2BAPI_InventoryUpdate.InvStatusUpdateResponseWrapper();
+        invWrapper.item = 'T-151082-2';
+        invWrapper.inventoryOnHand = '10';
+        invWrapper.inventoryAllocated = '2';
+        invWrapper.inventoryOnOrder = '0';
+        invWrapper.warehouseId = 'UDQS10';
+        B2BAPI_InventoryUpdate.updateObjects(invWrapper, msgUUID);
+
+        invWrapper.item = 'T-1075764-1';
+        invWrapper.inventoryOnHand = '20';
+        invWrapper.inventoryAllocated = '4';
+        invWrapper.inventoryOnOrder = '0';
+        invWrapper.warehouseId = 'UDQS10';
+        B2BAPI_InventoryUpdate.updateObjects(invWrapper, msgUUID);
+
+        invWrapper.item = 'T-1914970-1';
+        invWrapper.inventoryOnHand = '40';
+        invWrapper.inventoryAllocated = '6';
+        invWrapper.inventoryOnOrder = '0';
+        invWrapper.warehouseId = 'UDQS10';
+        B2BAPI_InventoryUpdate.updateObjects(invWrapper, msgUUID);
+
+        invWrapper.item = 'T-1053237-3';
+        invWrapper.inventoryOnHand = '50';
+        invWrapper.inventoryAllocated = '8';
+        invWrapper.inventoryOnOrder = '0';
+        invWrapper.warehouseId = 'UDQS10';
+        B2BAPI_InventoryUpdate.updateObjects(invWrapper, msgUUID);
+
+        invWrapper.item = 'T-1415171-3';
+        invWrapper.inventoryOnHand = '60';
+        invWrapper.inventoryAllocated = '10';
+        invWrapper.inventoryOnOrder = '0';
+        invWrapper.warehouseId = 'UDQS10';
+        B2BAPI_InventoryUpdate.updateObjects(invWrapper, msgUUID);
+
+        invWrapper.item = 'T-no-inventory-final';
+        invWrapper.inventoryOnHand = '70';
+        invWrapper.inventoryAllocated = '12';
+        invWrapper.inventoryOnOrder = '0';
+        invWrapper.warehouseId = 'UDQS10';
+        B2BAPI_InventoryUpdate.updateObjects(invWrapper, msgUUID);
+
+        //invWrapper.item = 'T-no-inv';  //not creating inventory record for this one
+        invWrapper.item = 'T-151082-1';
+        invWrapper.inventoryOnHand = '80';
+        invWrapper.inventoryAllocated = '14';
+        invWrapper.inventoryOnOrder = '0';
+        invWrapper.warehouseId = 'UDQS10';
+        B2BAPI_InventoryUpdate.updateObjects(invWrapper, msgUUID);
+
+        B2BProductSupersessionBatchable.buildProductSupersessionChain(products);
+
+
+    }
+
+    @IsTest
+    private static void addNeededFieldsForProductLogic_null_fields() {
+        List<String> flds;
+        List<String> returnflds = B2BUtilProduct.addNeededFieldsForProductLogic(flds);
+        Assert.isTrue(returnflds.contains('B2B_Replaced_By__c'));
+        Assert.isTrue(returnflds.contains('B2B_PACK_QUANTITY__c'));
+    }
+    @IsTest
+    private static void addNeededFieldsForProductLogic_empty_fields() {
+        List<String> flds = new List<String>();
+        List<String> returnflds = B2BUtilProduct.addNeededFieldsForProductLogic(flds);
+        Assert.isTrue(returnflds.contains('B2B_Replaced_By__c'));
+        Assert.isTrue(returnflds.contains('B2B_PACK_QUANTITY__c'));
+    }
+    @IsTest
+    private static void addNeededFieldsForProductLogic_merge_fields() {
+        List<String> flds = new List<String>{'Description'};
+        List<String> returnflds = B2BUtilProduct.addNeededFieldsForProductLogic(flds);
+        Assert.isTrue(returnflds.contains('Description'));
+        Assert.isTrue(returnflds.contains('B2B_Replaced_By__c'));
+        Assert.isTrue(returnflds.contains('B2B_PACK_QUANTITY__c'));
+    }
+
+    @IsTest
+    private static void resolveFinalPartId() {
+        B2BUtilProduct.finalPartSetForIdRetrieval.add('T-1415171-3');
+        B2BUtilProduct.finalPartSetForIdRetrieval.add('T-1914970-1');
+        B2BUtilProduct.finalPartSetForIdRetrieval.add('T-no-inv');
+        B2BUtilProduct.finalPartSetForIdRetrieval.add('T-no-product');
+        List<B2BUtilProduct.ProductData> productData = (List<B2BUtilProduct.ProductData>)JSON.deserializeStrict(MOCK_TEST_FINAL_PART_NEEDS_RESOLVED, List<B2BUtilProduct.ProductData>.class);
+        Test.startTest();
+        List<B2BUtilProduct.ProductData> returnProdData = B2BUtilProduct.resolveFinalPartDatum(productData);
+        Test.stopTest();
+        Assert.isNotNull(returnProdData.get(0).finalPartId, 'finalPartId should be populated');
+        Assert.areEqual(99999, returnProdData.get(0).finalPartPurchaseLimit, 'finalPartPurchaseLimit should be 99999');
+        Assert.isNotNull(returnProdData.get(1).finalPartId, 'finalPartId should be populated');
+        Assert.areEqual(99999, returnProdData.get(1).finalPartPurchaseLimit, 'finalPartPurchaseLimit should be 99999');
+        Assert.isNull(returnProdData.get(2).finalPartId, 'finalPartId should be null, there is no inventory');
+        Assert.areEqual(0, returnProdData.get(2).finalPartPurchaseLimit, 'finalPartPurchaseLimit should be 0, there is no inventory');
+        Assert.isNull(returnProdData.get(3).finalPartId, 'finalPartId should be null, there is no final product');
+        Assert.areEqual(0, returnProdData.get(3).finalPartPurchaseLimit, 'finalPartPurchaseLimit should be 0, there is no final product');
+    }
+
+    @IsTest
+    private static void createInventoryMap() {
+        List<String> skus = new List<String> ();
+        List<String> ids = new List<String> ();
+        for (Product2 prod : [SELECT Id, StockKeepingUnit FROM Product2]) {
+            skus.add(prod.StockKeepingUnit);
+            ids.add(prod.Id);
+        }
+        Test.startTest();
+        Map<Id, B2B_ProductInventory__c> returnSku = B2BUtilProduct.createInventoryMap(skus);
+        Map<Id, B2B_ProductInventory__c> returnId = B2BUtilProduct.createInventoryMap(ids);
+        Test.stopTest();
+
+        //These check are dependent on the number of mock inventory records created
+        Assert.areEqual(7, returnSku.size());
+        Assert.areEqual(7, returnId.size());
+    }
+
+    @IsTest
+    //TODO - there seems to be an issue with SupersessionData - it is not coming out the way I expected with sample data setup
+    private static void addProductSupersessionData() {
+        List<B2BUtilProduct.ProductData> productData = (List<B2BUtilProduct.ProductData>)JSON.deserializeStrict(MOCK_TEST_FINAL_PART_NEEDS_RESOLVED, List<B2BUtilProduct.ProductData>.class);
+        Map<Id, B2BUtilProduct.ProductData> productIdToProductData = new Map<Id, B2BUtilProduct.ProductData>();
+        //Build SKU list and Data Map of Id to ProductData to send into  method
+        List<String> skus = new List<String> ();
+        Map<String, Id> skuToId = new Map<String, Id>();
+        for (Product2 prod : [SELECT Id, StockKeepingUnit FROM Product2]) {
+            skuToId.put(prod.StockKeepingUnit, prod.Id);
+        }
+
+        for (B2BUtilProduct.ProductData pd : productData) {
+            pd.id = skuToId.get(pd.sku);
+            productIdToProductData.put(pd.id, pd);
+            skus.add(pd.sku);
+        }
+        //END Build SKU list and map
+        Test.startTest();
+        B2BUtilProduct.addProductSupersessionData(productIdToProductData, skus);
+        Test.stopTest();
+
+        System.debug(JSON.serializePretty(productIdToProductData));
+        for (B2BUtilProduct.ProductData pd : productIdToProductData.values()) {
+            if (pd.sku.equals('T-no-product-final')) {
+                Assert.isNull(pd.olderParts, 'There should be no olderParts');
+                Assert.areEqual(1, pd.newParts.size(), 'There should be 1 newParts');
+                Assert.isNull(pd.newParts.get(0).sku, 'SKU of newPart should be null');
+                Assert.areEqual(0, pd.newParts.get(0).inventoryAvailable, 'Inventory should 0');
+            } else if (pd.sku.equals('T-no-inventory-final')) {
+                Assert.isNull(pd.newParts, 'There should be no newParts');
+                Assert.isNull(pd.olderParts, 'There should be no olderParts');
+            } else if (pd.sku.equals('T-151082-2')) {
+                Assert.areEqual(1, pd.olderParts.size(), 'There should be 1 olderParts');
+                Assert.areEqual('T-151082-1', pd.olderParts.get(0).sku, 'SKU of older part should be T-151082-1');
+                Assert.areEqual(66, pd.olderParts.get(0).inventoryAvailable, 'Inventory should 66');
+                Assert.areEqual(1, pd.newParts.size(), 'There should be 1 newParts');
+                Assert.areEqual('T-1075764-1', pd.newParts.get(0).sku, 'SKU of newPart should be T-1075764-1');
+                Assert.areEqual(16, pd.newParts.get(0).inventoryAvailable, 'Inventory should 16');
+            } else if (pd.sku.equals('T-1053237-3')) {
+                Assert.isNull(pd.olderParts, 'There should be no olderParts');
+                Assert.isNull(pd.newParts, 'There should be no newParts');
+            }
+        }
+    }
+
+
+    @IsTest
+    private static void getProductsBySku_no_extras() {
+        skusToPullForTest = new List<String>{'T-1914970-1','T-1415171-3'};
+
+        Test.startTest();
+        List<B2BUtilProduct.ProductData> pd = B2BUtilProduct.getProductsBySku('','',skusToPullForTest, new List<String>{'Name'},true,true,true);
+        //System.debug(JSON.serializePretty(pd));
+        Test.stopTest();
+        String jsonResult = JSON.serialize(pd);
+        //System.debug(jsonResult);
+        Assert.isTrue(jsonResult.contains(skusToPullForTest.get(0)), 'Payload should contain ' + skusToPullForTest.get(0));
+        Assert.isTrue(jsonResult.contains(skusToPullForTest.get(1)), 'Payload should contain ' + skusToPullForTest.get(1));
+        Assert.isTrue(jsonResult.contains('"unitprice":null'), 'Payload should have unitprice be null');
+    }
+
+    @IsTest
+    private static void getProductsBySku_include_price() {
+        skusToPullForTest = new List<String>{'T-1914970-1','T-1415171-3'};
+        Test.startTest();
+        List<B2BUtilProduct.ProductData> pd = B2BUtilProduct.getProductsBySku('','',skusToPullForTest, new List<String>{'Name'},true,false,true);
+        //System.debug(JSON.serializePretty(pd));
+        Test.stopTest();
+        String jsonResult = JSON.serialize(pd);
+        //System.debug(jsonResult);
+        Assert.isTrue(jsonResult.contains(skusToPullForTest.get(0)), 'Payload should contain ' + skusToPullForTest.get(0));
+        Assert.isTrue(jsonResult.contains(skusToPullForTest.get(1)), 'Payload should contain ' + skusToPullForTest.get(1));
+        Assert.isTrue(jsonResult.contains('"unitprice":100'), 'Payload should have unitprice equal 100');
+        Assert.isTrue(jsonResult.contains('"olderParts":null'), 'Payload should have olderParts = null');
+    }
+
+    @IsTest
+    private static void getProductsBySku_include_supersession() {
+        skusToPullForTest = new List<String>{'T-1914970-1','T-1415171-3'};
+        Test.startTest();
+        List<B2BUtilProduct.ProductData> pd = B2BUtilProduct.getProductsBySku('','',skusToPullForTest, new List<String>{'Name'},true,true,false);
+        //System.debug(JSON.serializePretty(pd));
+        Test.stopTest();
+        String jsonResult = JSON.serialize(pd);
+        //System.debug(jsonResult);
+        Assert.isTrue(jsonResult.contains(skusToPullForTest.get(0)), 'Payload should contain ' + skusToPullForTest.get(0));
+        Assert.isTrue(jsonResult.contains(skusToPullForTest.get(1)), 'Payload should contain ' + skusToPullForTest.get(1));
+        Assert.isTrue(jsonResult.contains('"olderParts":['), 'Payload should contain older parts');
+
+    }
+    @IsTest
+    private static void getProductsBySku_include_price_and_supersession() {
+        skusToPullForTest = new List<String>{'T-1914970-1','T-1415171-3'};
+
+        Test.startTest();
+        List<B2BUtilProduct.ProductData> pd = B2BUtilProduct.getProductsBySku('','',skusToPullForTest, new List<String>{'Name'},true,false,false);
+        //System.debug(JSON.serializePretty(pd));
+        Test.stopTest();
+        String jsonResult = JSON.serialize(pd);
+        //System.debug(jsonResult);
+        Assert.isTrue(jsonResult.contains(skusToPullForTest.get(0)), 'Payload should contain ' + skusToPullForTest.get(0));
+        Assert.isTrue(jsonResult.contains(skusToPullForTest.get(1)), 'Payload should contain ' + skusToPullForTest.get(1));
+        Assert.isTrue(jsonResult.contains('"unitprice":100'), 'Payload should contain unitprice equal 100');
+        Assert.isTrue(jsonResult.contains('"olderParts":['), 'Payload should contain older parts');
+    }
+
+    @IsTest
+    private static void getProductsById_include_price_and_supersession() {
+        skusToPullForTest = new List<String>{'T-1914970-1','T-1415171-3'};
+        List<String> pIds = new List<String>();
+        for (Product2 product : [SELECT Id FROM Product2 WHERE StockKeepingUnit IN :skusToPullForTest]) {
+            pIds.add(product.Id);
+        }
+        Test.startTest();
+        List<B2BUtilProduct.ProductData> pdById = B2BUtilProduct.getProductsById('','',pIds, new List<String>{'Name'},true,false,false);
+        List<B2BUtilProduct.ProductData> pdBySku = B2BUtilProduct.getProductsBySku('','',skusToPullForTest, new List<String>{'Name'},true,false,false);
+        Test.stopTest();
+        //If bySku and byId return same results, we are good!
+        Assert.areEqual(JSON.serialize(pdBySku), JSON.serialize(pdById), 'payload or both bySku and byId should be identical');
+    }
+
+    @IsTest
+    private static void getProductsBySku_over500() {
+        skusToPullForTest = new List<String>();
+        for (Integer i=0; i<510; i++) {
+            skusToPullForTest.add('A' + i);
+        }
+        try {
+            Test.startTest();
+            B2BUtilProduct.getProductsBySku('', '', skusToPullForTest, new List<String>{
+                    'Name'
+            }, true, false, false);
+            Test.stopTest();
+            Assert.fail('This should have thrown an exception');
+        } catch (B2BException e) {
+            Assert.isTrue(e.getMessage().contains('exceeded'), 'Message should contain exceeded');
+        }
+    }
+
+    @IsTest
+    private static void getProductsById_over500() {
+        skusToPullForTest = new List<String>();
+        for (Integer i=0; i<510; i++) {
+            skusToPullForTest.add(getFakeId(Product2.SObjectType));
+        }
+        try {
+            Test.startTest();
+            B2BUtilProduct.getProductsById('', '', skusToPullForTest, new List<String>{
+                    'Name'
+            }, true, false, false);
+            Test.stopTest();
+            Assert.fail('This should have thrown an exception');
+        } catch (B2BException e) {
+            Assert.isTrue(e.getMessage().contains('exceeded'), 'Message should contain exceeded');
+        }
+    }
+
+
+
+
+    @IsTest
+    private static void getProductsBySearch_no_extras() {
+        skusToPullForTest = new List<String>{'T-1914970-1', 'T-1415171-3'};
+
+        ConnectApi.ProductSearchInput input = new ConnectApi.ProductSearchInput();
+        input.searchTerm = 'sku: T-1914970-1 T-1415171-3';
+        input.page = 1;
+        input.pageSize = 10;
+        input.includeQuantityRule = true;
+        input.includePrices = false;
+        input.grouping = null;
+        input.fields = new List<String>{ 'StockKeepingUnit', 'Name' };
+
+        Test.startTest();
+        B2BUtilProduct.ProductSearchWrapper pdBySearch = B2BUtilProduct.getProductsBySearch('','',input, true, true);
+        Test.stopTest();
+        //TODO check payload
+        System.debug(JSON.serializePretty(pdBySearch));
+
+    }
+
+    @IsTest
+    private static void getProductsBySearch_pricing() {
+        skusToPullForTest = new List<String>{'T-1914970-1', 'T-1415171-3'};
+
+        ConnectApi.ProductSearchInput input = new ConnectApi.ProductSearchInput();
+        input.searchTerm = 'sku: T-1914970-1 T-1415171-3';
+        input.page = 1;
+        input.pageSize = 10;
+        input.includeQuantityRule = true;
+        input.includePrices = false;
+        input.grouping = null;
+        input.fields = new List<String>{ 'StockKeepingUnit', 'Name' };
+
+        Test.startTest();
+        B2BUtilProduct.ProductSearchWrapper pdBySearch = B2BUtilProduct.getProductsBySearch('','',input, false, true);
+        Test.stopTest();
+        //TODO check payload
+        System.debug(JSON.serializePretty(pdBySearch));
+
+    }
+
+
+    @IsTest
+    private static void getProductsBySearch_pricing_and_supersession() {
+        skusToPullForTest = new List<String>{'T-1914970-1', 'T-1415171-3'};
+
+        ConnectApi.ProductSearchInput input = new ConnectApi.ProductSearchInput();
+        input.searchTerm = 'sku: T-1914970-1 T-1415171-3';
+        input.page = 1;
+        input.pageSize = 10;
+        input.includeQuantityRule = true;
+        input.includePrices = false;
+        input.grouping = null;
+        input.fields = new List<String>{ 'StockKeepingUnit', 'Name' };
+
+        Test.startTest();
+        B2BUtilProduct.ProductSearchWrapper pdBySearch = B2BUtilProduct.getProductsBySearch('','',input, false, false);
+        Test.stopTest();
+        //TODO check payload
+        System.debug(JSON.serializePretty(pdBySearch));
+    }
+
+
+    /* ******************************************************************************************************************
+       MOCK Data helpers
+    */
+
+    public static ConnectApi.ProductSearchResults makeTestProductSearchResults() {
+        ConnectApi.ProductSearchResults psr = new ConnectApi.ProductSearchResults();
+        ConnectApi.ProductSummaryPage psp = new ConnectApi.ProductSummaryPage();
+        List<ConnectApi.ProductSummary> prodSummaryList = new List<ConnectApi.ProductSummary>();
+        for (Product2 prod : [SELECT Id, StockKeepingUnit, Name, Description, B2B_IsProductSellable__c, B2B_IsSaleCategoryProduct__c,
+                B2B_LEAD_TIME__c, B2B_Replaced_By__c, B2B_UNITS__c, B2B_PACK_QUANTITY__c
+        FROM Product2 WHERE StockKeepingUnit IN :skusToPullForTest]) {
+            ConnectApi.ProductSummary ps = new ConnectApi.ProductSummary();
+            ps.id = prod.Id;
+            ps.name = prod.Name;
+            ps.productClass = ConnectApi.ProductClass.Simple;
+
+            Map<String, ConnectApi.FieldValue> fields = new Map<String, ConnectApi.FieldValue>();
+            ConnectApi.FieldValue fv = new ConnectApi.FieldValue();
+            fv.setValue(prod.StockKeepingUnit);
+            fields.put('StockKeepingUnit', fv);
+            fv = new ConnectApi.FieldValue();
+            fv.setValue(prod.Description);
+            fields.put('Description', fv);
+            fv = new ConnectApi.FieldValue();
+            fv.setValue(prod.Name);
+            fields.put('Name', fv);
+            fv = new ConnectApi.FieldValue();
+            fv.setValue(String.valueOf(prod.B2B_IsProductSellable__c));
+            fields.put('B2B_IsProductSellable__c', fv);
+            fv = new ConnectApi.FieldValue();
+            fv.setValue(String.valueOf(prod.B2B_IsSaleCategoryProduct__c));
+            fields.put('B2B_IsSaleCategoryProduct__c', fv);
+            fv = new ConnectApi.FieldValue();
+            fv.setValue(prod.B2B_LEAD_TIME__c);
+            fields.put('B2B_LEAD_TIME__c', fv);
+            fv = new ConnectApi.FieldValue();
+            fv.setValue(prod.B2B_Replaced_By__c);
+            fields.put('B2B_Replaced_By__c', fv);
+            fv = new ConnectApi.FieldValue();
+            fv.setValue(prod.B2B_UNITS__c);
+            fields.put('B2B_UNITS__c', fv);
+            fv = new ConnectApi.FieldValue();
+            fv.setValue(String.valueOf(prod.B2B_PACK_QUANTITY__c));
+            fields.put('B2B_PACK_QUANTITY__c', fv);
+
+            ps.fields = fields;
+            prodSummaryList.add(ps);
+        }
+        psp.products = prodSummaryList;
+        psp.total = 3;
+        psp.currencyIsoCode = 'USD';
+        psp.pageSize = 10;
+        psr.productsPage = psp;
+        return psr;
+    }
+
+    public static void outsiderCallingNeedToFakeASku() {
+        skusToPullForTest = new List<String>();
+        Product2 prod = [SELECT Id, StockKeepingUnit, Name, Description, B2B_IsProductSellable__c, B2B_IsSaleCategoryProduct__c,
+                B2B_LEAD_TIME__c, B2B_Replaced_By__c, B2B_UNITS__c, B2B_PACK_QUANTITY__c
+                FROM Product2 WHERE StockKeepingUnit != NULL AND IsActive = TRUE LIMIT 1].get(0);
+        skusToPullForTest.add(prod.StockKeepingUnit);
+        if (String.isBlank(prod.B2B_LEAD_TIME__c)) prod.B2B_LEAD_TIME__c = '99';
+        if (String.isBlank(prod.B2B_UNITS__c)) prod.B2B_UNITS__c = 'EA';
+        if (prod.B2B_PACK_QUANTITY__c==null) prod.B2B_PACK_QUANTITY__c = 1;
+        update prod;
+    }
+
+    public static ConnectApi.ProductOverviewCollection makeTestProductOverviewCollection() {
+        if ((skusToPullForTest == null) || (skusToPullForTest.isEmpty())) {
+            outsiderCallingNeedToFakeASku();
+        }
+        ConnectApi.ProductOverviewCollection poc = new ConnectApi.ProductOverviewCollection();
+        List<ConnectApi.ProductOverview> pos = new List<ConnectApi.ProductOverview>();
+        for (Product2 prod : [SELECT Id, StockKeepingUnit, Name, Description, B2B_IsProductSellable__c, B2B_IsSaleCategoryProduct__c,
+                B2B_LEAD_TIME__c, B2B_Replaced_By__c, B2B_UNITS__c, B2B_PACK_QUANTITY__c
+        FROM Product2 WHERE StockKeepingUnit IN :skusToPullForTest]) {
+            ConnectApi.ProductOverview po = new ConnectApi.ProductOverview();
+            po.id = prod.Id;
+            po.name = prod.Name;
+            po.productClass = ConnectApi.ProductClass.Simple;
+            po.sku = prod.StockKeepingUnit;
+            po.success = true;
+            Map<String, String> fields = new Map<String, String>();
+            fields.put('StockKeepingUnit', prod.StockKeepingUnit);
+            fields.put('Description', prod.Description);
+            fields.put('Name', prod.Name);
+            fields.put('B2B_IsProductSellable__c', String.valueOf(prod.B2B_IsProductSellable__c));
+            fields.put('B2B_IsSaleCategoryProduct__c', String.valueOf(prod.B2B_IsSaleCategoryProduct__c));
+            fields.put('B2B_LEAD_TIME__c', prod.B2B_LEAD_TIME__c);
+            fields.put('B2B_Replaced_By__c', prod.B2B_Replaced_By__c);
+            fields.put('B2B_UNITS__c', prod.B2B_UNITS__c);
+            fields.put('B2B_PACK_QUANTITY__c', String.valueOf(prod.B2B_PACK_QUANTITY__c));
+
+            po.fields = fields;
+            pos.add(po);
+        }
+        poc.products = pos;
+        poc.total = pos.size();
+        return poc;
+    }
+
+    public static ConnectApi.PricingResult makeTestCommerceStorePricing() {
+        if ((skusToPullForTest == null) || (skusToPullForTest.isEmpty())) {
+            outsiderCallingNeedToFakeASku();
+        }
+        ConnectApi.PricingResult pr = new ConnectApi.PricingResult();
+        List<ConnectApi.PricingResultLineItem> results = new List<ConnectApi.PricingResultLineItem>();
+
+        for (Product2 prod : [SELECT Id
+        FROM Product2 WHERE StockKeepingUnit IN :skusToPullForTest]) {
+            ConnectApi.PricingResultLineItem prli = new ConnectApi.PricingResultLineItem();
+            prli.listPrice='100';
+            prli.unitPrice='100';
+            prli.productId=prod.Id;
+            prli.success=true;
+            results.add(prli);
+        }
+        pr.pricingLineItemResults = results;
+        pr.success = true;
+        System.debug('pr: ' + pr);
+        return pr;
+    }
+
+    /* ******************************************************************************************************************
+       END MOCK Data helpers
+    */
+
+
+}
