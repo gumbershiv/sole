@@ -1,39 +1,25 @@
-public static ConnectApi.BatchResult[] makeTestAddToCart(List<String> skusToPullForTest) {
-    // List to hold the BatchResult that will be returned
-    List<ConnectApi.BatchResult> batchResults = new List<ConnectApi.BatchResult>();
-
-    // Simulate the input as a List of ConnectApi.BatchInput
-    List<ConnectApi.BatchInput> batchInputs = new List<ConnectApi.BatchInput>();
-
-    for (Product2 prod : [
-        SELECT Id FROM Product2 WHERE StockKeepingUnit IN :skusToPullForTest
-    ]) {
-        // Create CartItemInput for each product
-        ConnectApi.CartItemInput cartItem = new ConnectApi.CartItemInput();
-        cartItem.productId = prod.Id;
-        cartItem.quantity = 1;
-
-        // Create a BatchInput and add CartItemInput to it
-        ConnectApi.BatchInput batchInput = new ConnectApi.BatchInput();
-        batchInput.cartItems = new List<ConnectApi.CartItemInput>{cartItem};
-
-        // Add the BatchInput to the list
-        batchInputs.add(batchInput);
-    }
-
-    // Simulate processing each BatchInput and generating BatchResults
-    for (ConnectApi.BatchInput batchInput : batchInputs) {
-        ConnectApi.BatchResult batchResult = new ConnectApi.BatchResult();
+ public static ConnectApi.BatchResult[] makeTestAddToCart(List<String> skusToPullForTest) {
         
-        // Simulate status and result for each batch
-        batchResult.status = 'Success';  // Simulating success
-        batchResult.message = 'Cart items added successfully';
-        batchResult.success = true;
+        List<ConnectApi.BatchResult> batchResults = new List<ConnectApi.BatchResult>();
+        List<ConnectApi.BatchInput> batchInputs = new List<ConnectApi.BatchInput>();
         
-        // Add the result to the list
-        batchResults.add(batchResult);
-    }
+        for (Product2 prod : [
+            SELECT Id FROM Product2 WHERE StockKeepingUnit IN :skusToPullForTest
+        ]) {
+            ConnectApi.CartItemInput cartItem = new ConnectApi.CartItemInput();
+            cartItem.productId = prod.Id;
+            cartItem.quantity = '1';
+            
+            ConnectApi.BatchInput batchInput = new ConnectApi.BatchInput();
+            batchInput.cartItems = new List<ConnectApi.CartItemInput>{cartItem};
+                
+                batchInputs.add(batchInput);
+        }
 
-    // Return the simulated BatchResult array
-    return batchResults;
-}
+        for (ConnectApi.BatchInput batchInput : batchInputs) {
+            ConnectApi.BatchResult batchResult = new ConnectApi.BatchResult();
+            batchResults.add(batchResult);
+        }
+
+        return batchResults;
+    }
