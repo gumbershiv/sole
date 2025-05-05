@@ -1,19 +1,16 @@
-public static ConnectApi.addItemsToCart makeTestaddToCart() {
+public static ConnectApi.BatchResult makeTestaddToCart() {
         
-        ConnectApi.addItemsToCart pr = new ConnectApi.addItemsToCart();
-        List<ConnectApi.BatchResult> results = new List<ConnectApi.BatchResult>();
+        ConnectApi.BatchResult pr = new ConnectApi.BatchResult();
+        List<ConnectApi.CartItemInput> results = new List<ConnectApi.CartItemInput>();
 
         for (Product2 prod : [SELECT Id
         FROM Product2 WHERE StockKeepingUnit IN :skusToPullForTest]) {
-            ConnectApi.PricingResultLineItem prli = new ConnectApi.PricingResultLineItem();
-            prli.listPrice='100';
-            prli.unitPrice='100';
-            prli.productId=prod.Id;
-            prli.success=true;
-            results.add(prli);
+            ConnectApi.CartItemInput cartItem = new ConnectApi.CartItemInput();
+            cartItem.productId = prod.Id;
+            cartItem.quantity ='1';
+            results.add(cartItem);
         }
-        pr.pricingLineItemResults = results;
-        pr.success = true;
+        pr.cartItems = results;
         System.debug('pr: ' + pr);
         return pr;
     }
