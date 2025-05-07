@@ -1,11 +1,35 @@
- public Map<String, B2bUtilProduct.ProductData> getSkuToProductMap(List<String> skus, Id webstoreId, String effectiveAccountId) {
-        Map<String, B2bUtilProduct.ProductData> skuToProduct2Map = new Map<String, B2bUtilProduct.ProductData>();
-        List<B2bUtilProduct.ProductData> productData = B2bUtilProduct.getProductsBySku(webStoreId, effectiveAccountId, skus, null, true, true, true); // need to call it twice as l
-        for (B2bUtilProduct.ProductData product : productData) {
-            skuToProduct2Map.put(B2BUtil.toUpperCase(product.SKU), product);
+public void validateAndReduceCartItemCount(
+        String cartId,
+        Integer cartItemLimit,
+        Map<Id, B2BCartItemDTO> productIdToLb2bCartItemMap) {
+            WebCart wc = [SELECT Id, TotalProductCount FROM WebCart WHERE Id = :cartId];
+            if (wc.TotalProductCount <= cartItemLimit) {
+                //nothing to do.  Cart limit is OK
+                return;
+            }
+            
+            Integer extraItemCount = Integer.valueOf(wc.TotalProductCount) - Integer.valueOf(cartItemLimit);
+            
+            List<CartItem> cartItems = [
+                SELECT Id, Sku, Product2Id, Quantity 
+                FROM CartItem 
+                WHERE CartId = :cartId 
+                ORDER BY LastModifiedDate ASC, Id ASC 
+                LIMIT :extraItemCount
+            ];
+
+            Set<Id> ciToDelete = new Set<Id>();
+
+            for (CartItem ci : cartItems) {
+                B2BCartItemDTO ciDto = productIdToLb2bCartItemMap.get(ci.Product2Id);
+                if(ciDto != null){
+                    ciToDelete.add(ci.Id);
+                    ciDto.quantity = Integer.valueOf(ci.Quantity);
+                    ciDto.message = ITEM_REMOVED;
+                    ciDto.isSuccess = false;
+                }else {
+                    throw new B2BException(ERROR_UPLOAD_LIMIT);
+                }
+            }
+            delete [SELECT Id FROM CartItem WHERE Id IN :ciToDelete];
         }
-
-        return skuToProduct2Map;
-    }
-
-}
