@@ -1,42 +1,75 @@
 <template>
     <div>
-    <div class="slds-m-top_x-large slds-p-top_small slds-p-bottom_small slds-border_top slds-border_bottom">
-        <lightning-icon 
-          class="slds-p-right_xx-small" 
-          size="xx-small" 
-          onclick={handleDownArrow} 
-          icon-name={chevronIcon}>
-        </lightning-icon>
-        <span class="slds-p-right_xx-small"><b>Estimated package size(s) and weight(s)</b></span><span></span>
+        <!-- Clickable ribbon header -->
+        <div class="slds-m-top_x-large slds-p-top_small slds-p-bottom_small slds-border_top slds-border_bottom clickable-ribbon"
+             onclick={handleDownArrow}>
+            <lightning-icon 
+                class="slds-p-right_xx-small" 
+                size="xx-small" 
+                icon-name={chevronIcon}>
+            </lightning-icon>
+            <span class="slds-p-right_xx-small">
+                <b>Estimated package size(s) and weight(s)</b>
+            </span>
+        </div>
+
+        <!-- Hidden section -->
+        <div class="hiddenLists slds-m-top_small slds-hide">
+            <div class="slds-m-bottom_small">
+                This high level estimate is provided for your information only. Actual shipping container(s) will be determined by the warehouse.
+            </div>
+
+            <!-- Responsive Lightning Datatable -->
+            <lightning-datatable
+                key-field="id"
+                data={packageData}
+                columns={columns}
+                hide-checkbox-column
+                class="slds-table_bordered">
+            </lightning-datatable>
+        </div>
     </div>
-    <div class="hiddenLists slds-hide">
-      <div>
-            This high level estimate is provided for your information only. Actual shipping container(s) will be determined by the warehouse.
-          </div>
-  
-          <table class="slds-table slds-table_cell-buffer slds-table_bordered col">
-            <!-- <thead> -->
-              <!-- <tr class="colu"> -->
-                <th><div class="slds-truncate data-label-text-medium">Quantity</div></th>
-                <th><div class="slds-truncate data-label-text-medium">Dimension</div></th>
-                <th><div class="slds-truncate data-label-text-medium">Average weight per container</div></th>
-              <!-- </tr> -->
-            <!-- </thead> -->
-            <tbody>
-              <template for:each={packageData} for:item="item">
-                <tr key={item.id}>
-                  <td>
-                    <div class="slds-truncate slds-grid slds-grid_vertical-align-center">
-                      <img src={boxIconUrl} class="icon-box" alt="box icon" />
-                      X {item.quantity}
-                    </div>
-                  </td>
-                  <td><div class="slds-truncate">{item.dimension}</div></td>
-                  <td><div class="slds-truncate">{item.weight}</div></td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-    </div>
-</div>
 </template>
+import { LightningElement, track } from 'lwc';
+
+export default class PackageEstimateTable extends LightningElement {
+    @track isExpanded = false;
+
+    chevronIcon = 'utility:chevrondown'; // or 'utility:chevronright' when collapsed
+
+    @track packageData = [
+        { id: '1', quantity: 2, dimension: '12x10x8', weight: '5kg' },
+        { id: '2', quantity: 1, dimension: '15x12x6', weight: '4kg' }
+    ];
+
+    columns = [
+        {
+            label: 'Quantity',
+            fieldName: 'quantity',
+            type: 'text',
+            cellAttributes: {
+                iconName: 'utility:package',
+                iconPosition: 'left'
+            }
+        },
+        {
+            label: 'Dimension',
+            fieldName: 'dimension',
+            type: 'text'
+        },
+        {
+            label: 'Average weight per container',
+            fieldName: 'weight',
+            type: 'text'
+        }
+    ];
+
+    handleDownArrow() {
+        this.isExpanded = !this.isExpanded;
+        const section = this.template.querySelector('.hiddenLists');
+        section.classList.toggle('slds-hide');
+
+        this.chevronIcon = this.isExpanded ? 'utility:chevronup' : 'utility:chevrondown';
+    }
+}
+
