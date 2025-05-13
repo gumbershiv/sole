@@ -1,45 +1,42 @@
 <template>
-    <lightning-card title="Shipping Estimate">
-        <div class="slds-p-horizontal_medium">
-            <lightning-accordion allow-multiple-sections-open>
-                <lightning-accordion-section name="estimates" label="Estimated package size(s) and weight(s)">
-                    <p class="slds-text-body_small slds-p-bottom_small">
-                        This high level estimate is provided for your information only. Actual shipping container(s) will be determined by the warehouse.
-                    </p>
-                    <table class="slds-table slds-table_bordered slds-table_cell-buffer">
-                        <thead>
-                            <tr>
-                                <th>Quantity</th>
-                                <th>Dimension</th>
-                                <th>Average Weight per Container</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <template for:each={packages} for:item="pkg">
-                                <tr key={pkg.id}>
-                                    <td>
-                                        <lightning-icon icon-name="utility:package" size="x-small" class="slds-m-right_xx-small"></lightning-icon>
-                                        x{pkg.quantity}
-                                    </td>
-                                    <td>{pkg.dimension}</td>
-                                    <td>{pkg.weight}</td>
-                                </tr>
-                            </template>
-                        </tbody>
-                    </table>
-                </lightning-accordion-section>
-            </lightning-accordion>
-        </div>
-    </lightning-card>
+    <div>
+    <div class="slds-m-top_x-large slds-p-top_small slds-p-bottom_small slds-border_top slds-border_bottom">
+        <lightning-icon 
+          class="slds-p-right_xx-small" 
+          size="xx-small" 
+          onclick={handleDownArrow} 
+          icon-name={chevronIcon}>
+        </lightning-icon>
+        <span class="slds-p-right_xx-small"><b>Estimated package size(s) and weight(s)</b></span><span></span>
+    </div>
+    <div class="hiddenLists slds-hide">
+      <div>
+            This high level estimate is provided for your information only. Actual shipping container(s) will be determined by the warehouse.
+          </div>
+  
+          <table class="slds-table slds-table_cell-buffer slds-table_bordered col">
+            <!-- <thead> -->
+              <!-- <tr class="colu"> -->
+                <th><div class="slds-truncate data-label-text-medium">Quantity</div></th>
+                <th><div class="slds-truncate data-label-text-medium">Dimension</div></th>
+                <th><div class="slds-truncate data-label-text-medium">Average weight per container</div></th>
+              <!-- </tr> -->
+            <!-- </thead> -->
+            <tbody>
+              <template for:each={packageData} for:item="item">
+                <tr key={item.id}>
+                  <td>
+                    <div class="slds-truncate slds-grid slds-grid_vertical-align-center">
+                      <img src={boxIconUrl} class="icon-box" alt="box icon" />
+                      X {item.quantity}
+                    </div>
+                  </td>
+                  <td><div class="slds-truncate">{item.dimension}</div></td>
+                  <td><div class="slds-truncate">{item.weight}</div></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+    </div>
+</div>
 </template>
-import { LightningElement } from 'lwc';
-
-export default class EstimatedPackages extends LightningElement {
-    packages = [
-        { id: 1, quantity: 5, dimension: '250 x 250 x 250 in (635 x 635 x 635 cm)', weight: '1,000 lbs (453.59 kg)' },
-        { id: 2, quantity: 3, dimension: '82 x 66 x 70 in (208.3 x 167.6 x 177.8 cm)', weight: '250 lbs (113.40 kg)' },
-        { id: 3, quantity: 2, dimension: '40 x 40 x 21 in (101.6 x 101.6 x 53.3 cm)', weight: '100 lbs (45.36 kg)' },
-        { id: 4, quantity: 1, dimension: '20 x 20 x 20 in (50.8 x 50.8 x 50.8 cm)', weight: '28 lbs (12.70 kg)' },
-        { id: 5, quantity: 1, dimension: '10 x 10 x 10 in (25.4 x 25.4 x 25.4 cm)', weight: '10 lbs (4.54 kg)' }
-    ];
-}
