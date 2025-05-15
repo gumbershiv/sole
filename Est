@@ -1,130 +1,4 @@
-import { LightningElement, track,wire } from 'lwc';
-import boxIcon from '@salesforce/resourceUrl/ST_Theme2';
-import { CartSummaryAdapter} from "commerce/cartApi";
-
-
-export default class B2bPackageDetailsAndShippingNotes extends LightningElement {
-    @track freightEmail = '';
-    @track skipEmail = false;
-    @track packingReq = '';
-    @track shippingMarks = '';
-    chevronIcon = 'utility:chevrondown';
-
-    boxIconUrl = `${boxIcon}/images/icons/shipment.svg`;
-
-
-    /**
-     * Handle hidden list expand functionality
-     */
-    handleDownArrow(){
-        if(this.chevronIcon === "utility:chevrondown"){
-            this.chevronIcon = "utility:chevronup";
-            this.template.querySelector(".hiddenLists").classList.remove('slds-hide');
-        }else{
-            this.chevronIcon = "utility:chevrondown";
-            this.template.querySelector(".hiddenLists").classList.add('slds-hide');
-        }
-    }
-
-    @wire(CartSummaryAdapter)
-    setCartSummary({ data, error }) {
-       
-        if (data) {
-            this.cartId = data.cartId;
-            console.log("Cart Id", data.cartId);
-            console.log("Cart Summary", data);
-           
-           
-        } else if (error) {
-            console.error(error);
-        }
-    }
-
-    columns = [
-        {
-            label: 'Quantity',
-            fieldName: 'quantity',
-            type: 'url',
-            typeAttributes: {
-                label: {
-                    fieldName: 'quantityLabel'
-                },
-                target: '_blank'
-            },
-        },
-        {
-            label: 'Dimension',
-            fieldName: 'dimension',
-            type: 'text'
-        },
-        {
-            label: 'Average weight per container',
-            fieldName: 'weight',
-            type: 'text'
-        }
-    ];
-    packageData = [
-    {
-        id: 1,
-        imageUrl: this.boxIconUrl,
-        quantity: '5',
-        quantityLabel: 'X 5',
-        dimension: '250 x 250 x 250 in (635 x 635 x 635 cm)',
-        weight: '1,000 lbs (453.59 kg)'
-    },
-    {
-        id: 2,
-        quantity: '3',
-        imageUrl: this.boxIconUrl,
-        quantityLabel: 'X 3',
-        dimension: '82 x 66 x 70 in (208.3 x 167.6 x 177.8 cm)',
-        weight: '250 lbs (113.40 kg)'
-    },
-    {
-        id: 3,
-        quantity: '2',
-        imageUrl: this.boxIconUrl,
-        quantityLabel: 'X 2',
-        dimension: '40 x 40 x 21 in (101.6 x 101.6 x 53.3 cm)',
-        weight: '100 lbs (45.36 kg)'
-    },
-    {
-        id: 4,
-        quantity: '1',
-        imageUrl: this.boxIconUrl,
-        quantityLabel: 'X 1',
-        dimension: '20 x 20 x 20 in (50.8 x 50.8 x 50.8 cm)',
-        weight: '28 lbs (12.70 kg)'
-    },
-    {
-        id: 5,
-        quantity: '1',
-        imageUrl: this.boxIconUrl,
-        quantityLabel: 'X 1',
-        dimension: '10 x 10 x 10 in (25.4 x 25.4 x 25.4 cm)',
-        weight: '10 lbs (4.54 kg)'
-    }
-    ];
-
-    handleEmailChange(event) {
-    this.freightEmail = event.target.value;
-    }
-
-    handleSkipChange(event) {
-    this.skipEmail = event.target.checked;
-    if (this.skipEmail) {
-        this.freightEmail = '';
-    }
-    }
-
-    handlePackingChange(event) {
-    this.packingReq = event.target.value;
-    }
-
-    handleShippingChange(event) {
-    this.shippingMarks = event.target.value;
-    }
-}<template>
+<template>
     <lightning-card>
     <div>
         <!-- Clickable ribbon header -->
@@ -145,17 +19,8 @@ export default class B2bPackageDetailsAndShippingNotes extends LightningElement 
             <div class="slds-m-bottom_small">
                 This high level estimate is provided for your information only. Actual shipping container(s) will be determined by the warehouse.
             </div>
-            {boxIconUrl}
-
-            <!-- Responsive Lightning Datatable -->
-            <lightning-datatable
-                key-field="id"
-                data={packageData}
-                columns={columns}
-                hide-checkbox-column
-                class="slds-table_bordered">
-            </lightning-datatable>
-            <div>
+            
+            <div class="responsive-table">
             <table class="slds-table slds-table_cell-buffer slds-table_bordered col">
                 <!-- <thead> -->
                   <!-- <tr class="colu"> -->
@@ -184,3 +49,160 @@ export default class B2bPackageDetailsAndShippingNotes extends LightningElement 
     </div>
 </lightning-card>
 </template>
+import { LightningElement, track,wire } from 'lwc';
+import boxIcon from '@salesforce/resourceUrl/ST_Theme2';
+import { CartSummaryAdapter} from "commerce/cartApi";
+import getCartLineItems from '@salesforce/apex/B2BCheckoutController.getItemDetails';
+import { getMockData } from './mockedData';
+
+
+export default class B2bPackageDetailsAndShippingNotes extends LightningElement {
+    @track freightEmail = '';
+    @track skipEmail = false;
+    @track packingReq = '';
+    @track shippingMarks = '';
+    chevronIcon = 'utility:chevrondown';
+    cartId;
+    @track packageData ={};
+
+    boxIconUrl = `${boxIcon}/images/icons/shipment.svg`;
+
+
+    /**
+     * Handle hidden list expand functionality
+     */
+    handleDownArrow(){
+        if(this.chevronIcon === "utility:chevrondown"){
+            this.chevronIcon = "utility:chevronup";
+            this.template.querySelector(".hiddenLists").classList.remove('slds-hide');
+        }else{
+            this.chevronIcon = "utility:chevrondown";
+            this.template.querySelector(".hiddenLists").classList.add('slds-hide');
+        }
+    }
+
+    
+
+    @wire(CartSummaryAdapter)
+    setCartSummary({ data, error }) {
+       
+        if (data) {
+            this.cartId = data.cartId;
+            console.log("Cart Id", data.cartId);
+            console.log("Cart Summary", data);
+           
+           
+        } else if (error) {
+            console.error(error);
+        }
+    }
+
+    async connectedCallback(){
+        if (genUtil.isInSitePreview()) {
+            this.packageData = getMockData();
+            return;
+        } else {
+            console.log('cartId:Shi', this.cartId);
+            if (this.cartId !== null) {
+                await getCartLineItems({ 
+                        cartId: this.cartId 
+                    })
+                    .then(result => {
+                        console.log('Cart Line Items:', result);
+                        //this.processCartItems(result);
+                    })
+                    .catch(error => {
+                        console.error('Error fetching cart line items:', error);
+                    });
+            }
+        }
+    }
+
+    processCartItems(result) {
+        this.cartItems = result.map(item => {
+            const convertedItem = this.convertData(item);
+            return {
+                id: convertedItem.Id,
+                imageUrl: this.boxIconUrl,
+                quantity: convertedItem.Quantity,
+                quantityLabel: `X ${convertedItem.Quantity}`,
+                dimension: `${convertedItem.Product2.B2B_LENGTH__c} x ${convertedItem.Product2.B2B_WIDTH__c} x ${convertedItem.Product2.B2B_HEIGHT__c} in (${convertedItem.Product2.B2B_LENGTH__c} x ${convertedItem.Product2.B2B_WIDTH__c} x ${convertedItem.Product2.B2B_HEIGHT__c} cm)`,
+                weight: `${convertedItem.Product2.B2B_WEIGHT__c} lbs (${(convertedItem.Product2.B2B_WEIGHT__c * 0.453592).toFixed(2)} kg)`
+            };
+        });
+    }
+
+    convertData(item) {
+        const convertedItem = { ...item };
+
+        // Convert weight from lbs to kg
+        if (convertedItem.Product2.B2B_WEIGHT__c) {
+            convertedItem.Product2.B2B_WEIGHT__c = (convertedItem.Product2.B2B_WEIGHT__c * 0.453592).toFixed(2);
+        }
+
+        // Convert dimensions from inches to cm
+        if (convertedItem.Product2.B2B_LENGTH__c) {
+            convertedItem.Product2.B2B_LENGTH__c = (convertedItem.Product2.B2B_LENGTH__c * 2.54).toFixed(2);
+        }
+        if (convertedItem.Product2.B2B_WIDTH__c) {
+            convertedItem.Product2.B2B_WIDTH__c = (convertedItem.Product2.B2B_WIDTH__c * 2.54).toFixed(2);
+        }
+        if (convertedItem.Product2.B2B_HEIGHT__c) {
+            convertedItem.Product2.B2B_HEIGHT__c = (convertedItem.Product2.B2B_HEIGHT__c * 2.54).toFixed(2);
+        }
+
+        return convertedItem;
+    }
+
+    // @wire(getCartLineItems,{cartId: `${cartId}`})
+    //     wiredCartLineItems({error,data}){
+    
+    //     if(data){
+    //         console.log("Cart Summary line Items", data);
+            
+    //   }}
+
+    columns = [
+        {
+            label: 'Quantity',
+            fieldName: 'quantity',
+            type: 'url',
+            typeAttributes: {
+                label: {
+                    fieldName: 'quantityLabel'
+                },
+                target: '_blank'
+            },
+        },
+        {
+            label: 'Dimension',
+            fieldName: 'dimension',
+            type: 'text'
+        },
+        {
+            label: 'Average weight per container',
+            fieldName: 'weight',
+            type: 'text'
+        }
+    ];
+    
+
+    handleEmailChange(event) {
+    this.freightEmail = event.target.value;
+    }
+
+    handleSkipChange(event) {
+    this.skipEmail = event.target.checked;
+    if (this.skipEmail) {
+        this.freightEmail = '';
+    }
+    }
+
+    handlePackingChange(event) {
+    this.packingReq = event.target.value;
+    }
+
+    handleShippingChange(event) {
+    this.shippingMarks = event.target.value;
+    }
+}
