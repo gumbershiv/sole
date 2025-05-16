@@ -22,14 +22,10 @@ public void validateAndReduceCartItemCount(
 
             for (CartItem ci : cartItems) {
                 B2BCartItemDTO ciDto = productIdToLb2bCartItemMap.get(ci.Product2Id);
-                if(ciDto != null){
                     ciToDelete.add(ci.Id);
                     ciDto.quantity = Integer.valueOf(ci.Quantity);
                     ciDto.message = ITEM_REMOVED;
                     ciDto.isSuccess = false;
-                }else {
-                    throw new B2BException(ERROR_UPLOAD_LIMIT);
-                }
             }
             delete [SELECT Id FROM CartItem WHERE Id IN :ciToDelete];
         }
