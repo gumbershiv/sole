@@ -1,34 +1,40 @@
 public Map<String, B2bUtilProduct.ProductData> getSkuToProductMap(List<String> skus, Id webstoreId, String effectiveAccountId) {
     Map<String, B2bUtilProduct.ProductData> skuToProduct2Map = new Map<String, B2bUtilProduct.ProductData>();
+
     if (skus == null || skus.isEmpty()) return skuToProduct2Map;
 
-    // Clean the SKUs (~ to actual SKU)
+    // Clean SKUs (~ to actual SKU)
     List<String> cleanedSkus = new List<String>();
     for (String sku : skus) {
         cleanedSkus.add(sku.contains('~') ? sku.split('~')[0] : sku);
     }
 
     Integer batchSize = 500;
-    Integer totalSkus = cleanedSkus.size();
+    List<String> currentBatch = new List<String>();
 
-    for (Integer start = 0; start < totalSkus; start += batchSize) {
-        Integer end = Math.min(start + batchSize, totalSkus);
-        List<String> skuBatch = new List<String>(cleanedSkus.subList(start, end));
+    for (Integer i = 0; i < cleanedSkus.size(); i++) {
+        currentBatch.add(cleanedSkus[i]);
 
-        List<B2bUtilProduct.ProductData> batchResults = B2bUtilProduct.getProductsBySku(
-            webstoreId, 
-            effectiveAccountId, 
-            skuBatch, 
-            null, 
-            true, 
-            true, 
-            true
-        );
+        // Process batch when full or at the end
+        if (currentBatch.size() == batchSize || i == cleanedSkus.size() - 1) {
+            List<B2bUtilProduct.ProductData> products = B2bUtilProduct.getProductsBySku(
+                webstoreId,
+                effectiveAccountId,
+                currentBatch,
+                null,
+                true,
+                true,
+                true
+            );
 
-        if (batchResults != null) {
-            for (B2bUtilProduct.ProductData product : batchResults) {
-                skuToProduct2Map.put(B2BUtil.toUpperCase(product.SKU), product);
+            if (products != null) {
+                for (B2bUtilProduct.ProductData product : products) {
+                    skuToProduct2Map.put(B2BUtil.toUpperCase(product.SKU), product);
+                }
             }
+
+            // Reset batch
+            currentBatch.clear();
         }
     }
 
