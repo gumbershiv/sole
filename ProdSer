@@ -1,51 +1,36 @@
 public Map<String, B2bUtilProduct.ProductData> getSkuToProductMap(List<String> skus, Id webstoreId, String effectiveAccountId) {
-        Map<String, B2bUtilProduct.ProductData> skuToProduct2Map = new Map<String, B2bUtilProduct.ProductData>();
-        
-        // Split SKUs into two chunks
-        List<String> firstChunk = new List<String>();
-        List<String> secondChunk = new List<String>();
-        
-        // Ensure that the first chunk has a maximum of 500 SKUs
-        for (Integer i = 0; i < Math.min(500, skus.size()); i++) {
-            String sku = skus[i].contains('~') ? skus[i].split('~')[0] : skus[i];
-            firstChunk.add(sku);
-        }
-        
-        // The second chunk will have the remaining SKUs if there are more than 500
-        for (Integer i = 500; i < skus.size(); i++) {
-            String sku = skus[i].contains('~') ? skus[i].split('~')[0] : skus[i];
-            secondChunk.add(sku);
-        }
-        // Fetch product data for the first chunk
-        List<B2bUtilProduct.ProductData> productData = B2bUtilProduct.getProductsBySku(
+    Map<String, B2bUtilProduct.ProductData> skuToProduct2Map = new Map<String, B2bUtilProduct.ProductData>();
+    if (skus == null || skus.isEmpty()) return skuToProduct2Map;
+
+    // Clean the SKUs (~ to actual SKU)
+    List<String> cleanedSkus = new List<String>();
+    for (String sku : skus) {
+        cleanedSkus.add(sku.contains('~') ? sku.split('~')[0] : sku);
+    }
+
+    Integer batchSize = 500;
+    Integer totalSkus = cleanedSkus.size();
+
+    for (Integer start = 0; start < totalSkus; start += batchSize) {
+        Integer end = Math.min(start + batchSize, totalSkus);
+        List<String> skuBatch = new List<String>(cleanedSkus.subList(start, end));
+
+        List<B2bUtilProduct.ProductData> batchResults = B2bUtilProduct.getProductsBySku(
             webstoreId, 
             effectiveAccountId, 
-            firstChunk, 
+            skuBatch, 
             null, 
             true, 
             true, 
             true
         );
-        
-        // If there are remaining SKUs in the second chunk, fetch them
-        if (!secondChunk.isEmpty()) {
-            productData.addAll(B2bUtilProduct.getProductsBySku(
-                webstoreId, 
-                effectiveAccountId, 
-                secondChunk, 
-                null, 
-                true, 
-                true, 
-                true
-            ));
-        }
-        
-        //List<B2bUtilProduct.ProductData> productData = B2bUtilProduct.getProductsBySku(webStoreId, effectiveAccountId, skus, null, true, false, false);
-        for (B2bUtilProduct.ProductData product : productData) {
-            skuToProduct2Map.put(B2BUtil.toUpperCase(product.SKU), product);
-        }
 
-        return skuToProduct2Map;
+        if (batchResults != null) {
+            for (B2bUtilProduct.ProductData product : batchResults) {
+                skuToProduct2Map.put(B2BUtil.toUpperCase(product.SKU), product);
+            }
+        }
     }
 
+    return skuToProduct2Map;
 }
