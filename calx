@@ -1,0 +1,682 @@
+public with sharing class B2BFreightCalculatorController {
+    /**
+     * @Description: Wrapper class to hold Shipping Option attributes for UI
+     */
+    public class FreightWrapper implements Comparable  {
+        public String label;
+        public String oitem;
+        public String option;
+        public String price;
+        public String type;
+        public String friendlyLabel;
+        public Boolean checkFreightFailure;
+        public String shippingLabel;
+        public Integer position;
+
+        public Integer compareTo(Object compareTo) {
+            // Cast argument to OpportunityWrapper
+            FreightWrapper compareToObj = (FreightWrapper)compareTo;
+
+            // The return value of 0 indicates that both elements are equal.
+            Integer returnValue = 0;
+            if (this.position > compareToObj.position) {
+                // Set return value to a positive value.
+                returnValue = 1;
+            } else if (this.position < compareToObj.position) {
+                // Set return value to a negative value.
+                returnValue = -1;
+            }
+            return returnValue;
+        }
+    }
+
+    //private static final String className = 'B2BFreightCalculatorController';
+    private static final String CANADA_LABEL = 'Canada';
+    private static final String AUSTRALIA_LABEL = 'Australia';
+    final private static String USER_REGISTRATION_ERROR = 'Can\'t find User Registration record.';
+    final private static String CARTID_ERROR = 'CartId is empty.';
+    final private static String CONTACT_ADDRESS_ERROR = 'Contact address is empty.';
+    final private static String CART_ERROR = 'Cart is empty.';
+
+    // public B2BFreightCalculatorController(){}
+    // public B2BFreightCalculatorController(B2BCheckoutController obj){}
+
+    /**
+     * @Description: Use this method to receive the freight cost for different shipping options.
+     * @param cartId CCRZ cart[0] identifier that will be used as unique identifier of service transaction
+     * @param ctx Context variable for remote call
+     * @param doFreightCall indicates to call freight or not
+     * @param useIntermediate indicates to use intermediate address 
+     * @return B2BActionResponse
+     */
+    private static B2BFreightEstimator.cartonBoxEstimatorData freightEstimatorDataWrapper = null; //wrapper to hold all the freight estimator data
+    private static Decimal currencyFactor=0.0; //160805- currency factor for distributor user
+    @AuraEnabled
+    public static B2BActionResponse getFreightCheck( String cartId,Boolean doFreightCall,Boolean useIntermediate){
+        final String methodName = 'getFreightCheck';
+        B2BActionResponse resp;
+        FreightCheckDetail response = new FreightCheckDetail();
+        system.debug('FreightCheckDetail response  @@@@'+ response);
+
+        //PBI: 160805: consider Distibutor price factor from contact record for distributor User
+        if(FeatureManagement.checkPermission('IsDistributor')){
+            Id contactId = cc_ST_GetContactDetails.currContact.id;
+            List<Contact> distCon = [SELECT Id,ST_PRICE_FACTOR__c,ST_REGIONAL_FACTOR__c,ST_CURRENCY_FACTOR__c FROM Contact WHERE id=:contactId];
+            currencyFactor = !distCon.isEmpty() & distCon[0].ST_CURRENCY_FACTOR__c != null ? distCon[0].ST_CURRENCY_FACTOR__c : 0.0;
+			//ccrz.ccLog.log('Distributor currencyFactor in B2BFreightCalculatorController:',currencyFactor);
+        }
+
+        //PBI 159314 : does freight call based input parameter
+        if (doFreightCall) {
+            // List<ccrz__E_ContactAddr__c> ccShipToCon;
+            // List<ccrz__E_ContactAddr__c> ccIntermediateToCon;
+            B2BFreightCalculator.ShipToWrapper shipTo = new B2BFreightCalculator.ShipToWrapper();
+
+            shipTo.totalPackageWeight = 0.0;
+            
+            try {
+               //TODO list as of now commented
+                // if (String.isBlank(cartId)) {
+                //     throw new cc_ST_CustomException(CARTID_ERROR);
+                // }
+                shipTo.transactionId = cartId;
+
+                // Get Cart Items
+                List<CartItem> cartItems = [
+                        SELECT id, NetUnitPrice, Product2Id, Product2.StockKeepingUnit,
+                            Product2.B2B_UNITOFMEASURE__c, Product2.B2B_WEIGHT__c,
+                            Quantity , CartId, 
+                            Product2.B2B_PACK_QUANTITY__c,Product2.QuantityUnitOfMeasure,Product2.B2B_HEIGHT__c,
+                            Product2.B2B_WIDTH__c, Product2.B2B_LENGTH__c
+                        FROM CartItem 
+                        WHERE CartId = :cartId
+                    ];
+                List<WebCart> cart = [
+                        SELECT B2B_ShipTo_MDM_LNID__c,	B2B_Intermediate_MDM_LNID__c,
+                        B2B_ShipToAddress__PostalCode__s, B2B_ShipToAddress__CountryCode__s,
+                        B2B_ShipToAddress__City__s, B2B_ShipToAddress__StateCode__s,B2B_IntermediateAddress__PostalCode__s,
+                        B2B_IntermediateAddress__CountryCode__s, B2B_IntermediateAddress__City__s,
+                        B2B_IntermediateAddress__StateCode__s
+                        FROM WebCart 
+                        WHERE Id = :cartId
+                    ];
+                // WebCart cart[0] = new WebCart(Id = cartId);
+                system.debug('B2B_ShipTo_MDM_LNID__c--->'+cart[0].B2B_ShipTo_MDM_LNID__c);
+                system.debug('B2B_Intermediate_MDM_LNID__c--->'+cart[0].B2B_Intermediate_MDM_LNID__c);
+
+                    //TODO list as of now commented
+                // if (cartObj.isEmpty() || cartObj == null) {
+                //     throw new cc_ST_CustomException(CONTACT_ADDRESS_ERROR);
+                // } 
+
+                //Validate ShipTo Postalcode
+                //Use Intermediate address if useIntermediate flag is true else ship to address
+                if(!useIntermediate){
+                    if (cart[0].B2B_ShipTo_MDM_LNID__c != null) {
+                        // ccShipToCon = [
+                        //         SELECT ccrz__Country__c, 
+                        //             ccrz__City__c, 
+                        //             ccrz__State__c, 
+                        //             ccrz__PostalCode__c 
+                        //         FROM ccrz__E_ContactAddr__c 
+                        //         WHERE Id = :cart[0].B2B_ShipTo_MDM_LNID__c 
+                        //     ];
+                            
+                        if (String.isEmpty(cart[0].B2B_ShipToAddress__PostalCode__s) 
+                            // || String.isEmpty(cart[0].B2B_ShipToAddress__City__s) // commented coz this functionality is gonna be enhansment
+                            // || String.isEmpty(cart[0].B2B_ShipToAddress__StateCode__s) // not all the contacts has this data yet
+                            || String.isEmpty(cart[0].B2B_ShipToAddress__CountryCode__s)
+                        ) {
+                            throw new cc_ST_CustomException(CONTACT_ADDRESS_ERROR);
+                        } else {
+                            shipTo.postalCode = cart[0].B2B_ShipToAddress__PostalCode__s;
+                            shipTo.city = String.isNotBlank(cart[0].B2B_ShipToAddress__City__s) ? cart[0].B2B_ShipToAddress__City__s : '';
+                            // shipTo.countryCode = cc_ST_CommonUtil.getCountryCode(cart[0].B2B_IntermediateAddress__CountryCode__s);
+                            shipTo.countryCode = cart[0].B2B_IntermediateAddress__CountryCode__s;
+                            // shipTo.state = String.isNotBlank(cart[0].B2B_IntermediateAddress__StateCode__s) ? cc_ST_CommonUtil.getStateCode(cart[0].B2B_IntermediateAddress__StateCode__s, shipTo.countryCode) : '';
+                            shipTo.state = String.isNotBlank(cart[0].B2B_IntermediateAddress__StateCode__s) ? cart[0].B2B_IntermediateAddress__StateCode__s : ' ';
+                            System.debug('shipTo.postalCode'+ shipTo.postalCode);
+                        }
+    
+                    } else {
+                        throw new cc_ST_CustomException(CART_ERROR);
+                    }
+                }else{
+                    if (cart[0].B2B_Intermediate_MDM_LNID__c != null) {
+                        // ccIntermediateToCon = [
+                        //         SELECT ccrz__Country__c, 
+                        //             ccrz__City__c, 
+                        //             ccrz__State__c, 
+                        //             ccrz__PostalCode__c 
+                        //         FROM ccrz__E_ContactAddr__c 
+                        //         WHERE Id = :cart[0].B2B_Intermediate_MDM_LNID__c 
+                        //     ];
+                            
+                        if (String.isEmpty(cart[0].B2B_IntermediateAddress__PostalCode__s) 
+                            // || String.isEmpty(cart[0].B2B_IntermediateAddress__City__s) // commented coz this functionality is gonna be enhansment
+                            // || String.isEmpty(cart[0].B2B_IntermediateAddress__StateCode__s) // not all the contacts has this data yet
+                            || String.isEmpty(cart[0].B2B_IntermediateAddress__CountryCode__s)
+                        ) {
+                            throw new cc_ST_CustomException(CONTACT_ADDRESS_ERROR);
+                        } else {
+                            shipTo.postalCode = cart[0].B2B_IntermediateAddress__PostalCode__s;
+                            shipTo.city = String.isNotBlank(cart[0].B2B_IntermediateAddress__City__s) ? cart[0].B2B_IntermediateAddress__City__s : '';
+                            // shipTo.countryCode = cc_ST_CommonUtil.getCountryCode(cart[0].B2B_IntermediateAddress__CountryCode__s);
+                            shipTo.countryCode = cart[0].B2B_IntermediateAddress__CountryCode__s;
+                            // shipTo.state = String.isNotBlank(cart[0].B2B_IntermediateAddress__StateCode__s) ? cc_ST_CommonUtil.getStateCode(cart[0].B2B_IntermediateAddress__StateCode__s, shipTo.countryCode) : '';
+                            shipTo.state = String.isNotBlank(cart[0].B2B_IntermediateAddress__StateCode__s) ? cart[0].B2B_IntermediateAddress__StateCode__s : ' ';
+                        }
+
+                    } else {
+                        throw new cc_ST_CustomException(CART_ERROR);
+                    }
+                }
+                
+                //turns ON/OFf the freight Estimatior calculation until LN is ready
+                if((System.Label.cc_ST_FreightEstCalcSwitch).equals('ON')){
+                    //preparing the product related information 
+                    List<B2BFreightEstimator.cartItemsInfo> productsInfo = new List<B2BFreightEstimator.cartItemsInfo>();
+                    for (CartItem cartItem:cartItems){
+                        B2BFreightEstimator.cartItemsInfo prodInfo = new B2BFreightEstimator.cartItemsInfo();
+                        prodInfo.cartId = cartItem.CartId;
+                        prodInfo.quantity = cartItem.Quantity;
+                        prodInfo.sku	= cartItem.Product2.StockKeepingUnit;
+                        prodInfo.weight = cartItem.Product2.B2B_WEIGHT__c;
+                        prodInfo.height = cartItem.Product2.B2B_HEIGHT__c;
+                        prodInfo.width = cartItem.Product2.B2B_WIDTH__c;
+                        prodInfo.length = cartItem.Product2.B2B_LENGTH__c;
+                        prodInfo.qtyPerUnit = cartItem.Product2.B2B_PACK_QUANTITY__c;
+                        prodInfo.uom = cartItem.Product2.QuantityUnitOfMeasure;
+                        productsInfo.add(prodInfo);
+                    }
+                    //Calculate the Carton estimation for the cartItems and also include woodCrate and LongTerm Pcakaging costs estimated for the parcels
+                    B2BFreightEstimator.cartonBoxEstimatorData estimatedCartonsData = B2BFreightEstimator.getCartonBoxEstimate(productsInfo);
+                    if(estimatedCartonsData!=null && !estimatedCartonsData.cartonboxAssignmentData.isEmpty()){
+                        //Iterates through cartItems with Cartons and finds total weight
+                        for(B2BFreightEstimator.cartonboxAssignment carton:estimatedCartonsData.cartonboxAssignmentData){
+                            shipTo.totalPackageWeight += Decimal.valueof(carton.packageWeight);
+                        }
+                        system.debug('estimatedCartonsData.cartonboxAssignmentData @@@@'+ estimatedCartonsData.cartonboxAssignmentData);
+                        response.freightEstimatorCartonData = estimatedCartonsData.cartonboxAssignmentData;
+                        //Passing Items with Carton boxes as parameter to use it in Evans API
+                        shipTo.freightEstimatorData = estimatedCartonsData.cartonboxAssignmentData; 
+                    } 
+                     //Variable with all freight estimator information 
+                     	freightEstimatorDataWrapper = estimatedCartonsData;
+                }
+                else{
+                    // Calculate Cart weight
+                    for (CartItem cartItem:cartItems) { 
+                        if (cartItem.Product2.B2B_WEIGHT__c != null && cartItem.Product2.B2B_WEIGHT__c > 0){
+                            // starts case number: 00140610 - consider unit of measure to calculate gross weight
+                            if(cartItem.Product2.QuantityUnitOfMeasure =='foot lengths' || cartItem.Product2.QuantityUnitOfMeasure =='pack')
+                            {
+                            shipTo.totalPackageWeight += (cartItem.Product2.B2B_WEIGHT__c * cartItem.Product2.B2B_PACK_QUANTITY__c ) * cartItem.Quantity;
+                            system.debug('shipTo.totalPackageWeight in if'+shipTo.totalPackageWeight); 
+                            }
+                            else
+                            {
+                            shipTo.totalPackageWeight += cartItem.Product2.B2B_WEIGHT__c * cartItem.Quantity;
+                            system.debug('shipTo.totalPackageWeight in if'+shipTo.totalPackageWeight); 
+                            }
+                            //ends case number: 00140610
+                        }
+                    }
+                    shipTo.freightEstimatorData = null;
+                }
+
+                System.debug('shipTo.totalPackageWeight-->'+shipTo.totalPackageWeight);
+                if (shipTo.totalPackageWeight == 0.0) {
+                    shipTo.totalPackageWeight = 1; //changed from 0.01 to 1 as part of freight calc 2.0
+                }
+
+            } catch(Exception e) {
+                System.debug('**********************Exception**************'+e.getStackTraceString());
+                System.debug('Exception at: ' + e.getLineNumber() + ' Exception message:' + e.getMessage());
+
+                // //cc_ST_LogUtil.createRecordLNFailureUpdate
+                //         (
+                //             className,
+                //             methodName,
+                //             'Exception at:' + e.getLineNumber() + ' Exception message: ' + e.getMessage(), 
+                //             '',
+                //             datetime.now(), 
+                //             datetime.now(), 
+                //             cc_ST_StaticConstants.CODE_EXCEPTION, 
+                //             'transactionId: ' + cartId
+                //         );
+
+                // resp.data = null;
+                // resp.success = false;
+                resp = new B2BActionResponse(false, e.getMessage(), null);
+                return resp;
+            }
+
+            try {
+                System.debug('shipTo>>>'+ shipTo);
+                List<B2BFreightCalculator.ShippingOptionWrapper> shippingOptions = B2BFreightCalculator.doFreightCallout(shipTo);
+                System.debug('shippingOptions>>>'+ shippingOptions);
+                List<FreightWrapper> shippingOptionsWrapper= buildFreightWrappers(shippingOptions);
+                response.shippingOptions = shippingOptionsWrapper;
+
+                  //Passing woodcrate and longterm cost values as packaging options to the UI
+                if((System.Label.cc_ST_FreightEstCalcSwitch).equals('ON') && shippingOptions!=null){
+                    List<B2BFreightCalculator.ShippingOptionWrapper> packagingOptions = new List<B2BFreightCalculator.ShippingOptionWrapper>();
+                    if(freightEstimatorDataWrapper!=null){
+                        B2BFreightCalculator.ShippingOptionWrapper option = new B2BFreightCalculator.ShippingOptionWrapper();
+                        option.Provider = shippingOptions[0].Provider;
+                        option.Type = B2BFreightCalculator.Shipment.CARDBOARD;
+                        option.Price = String.valueOf(0.00);
+                        packagingOptions.add(option);
+                    }
+                    if(freightEstimatorDataWrapper!=null &&  freightEstimatorDataWrapper.woodCrateCost!= 0){
+                        B2BFreightCalculator.ShippingOptionWrapper option = new B2BFreightCalculator.ShippingOptionWrapper();
+                        option.Provider = shippingOptions[0].Provider;
+                        option.Type = B2BFreightCalculator.Shipment.WOODCRATE;
+                        Decimal price = freightEstimatorDataWrapper.woodCrateCost.setScale(2,RoundingMode.HALF_UP);
+                        System.debug('longTermCost-price-->'+price);
+                        //160805:Apply currency conversion(USD-EUR) for Distributor user to resolve cache issue on UI
+                        if(FeatureManagement.checkPermission('IsDistributor')&& currencyFactor > 0){
+                            price = (((100-currencyFactor)/100)* price).setScale(2,RoundingMode.HALF_UP) ;
+                        }
+                        option.Price = String.valueOf(price);
+                        packagingOptions.add(option);
+                    }
+                    if(freightEstimatorDataWrapper!=null && freightEstimatorDataWrapper.longTermCost!=0){
+                        B2BFreightCalculator.ShippingOptionWrapper option = new B2BFreightCalculator.ShippingOptionWrapper();
+                        option.Provider = shippingOptions[0].Provider;
+                        option.Type = B2BFreightCalculator.Shipment.LONGTERM;
+                        Decimal price = freightEstimatorDataWrapper.longTermCost.setScale(2,RoundingMode.HALF_UP);
+                        System.debug('longTermCost-price-->'+price);
+                        //160805:Apply currency conversion(USD-EUR) for Distributor user to resolve cache issue on UI
+                        if(FeatureManagement.checkPermission('IsDistributor')&& currencyFactor > 0){
+                            price = (((100-currencyFactor)/100)* price).setScale(2,RoundingMode.HALF_UP) ;
+                        }
+                        option.Price = String.valueOf(price);
+                        packagingOptions.add(option);
+                    }   
+                    
+                    //added freight special Packaging prices to UI
+                    List<FreightWrapper> packagingOptionsWrapper= buildFreightWrappers(packagingOptions);
+                    response.packagingOptions = packagingOptionsWrapper;
+                    
+                    if(freightEstimatorDataWrapper!=null){
+                     //cc ST Logs for estimated carton boxes, assignment and skipped products weighing zero
+            			String freightMockCartonsLog = 'Freight Mock Cartons : ' + freightEstimatorDataWrapper.cartonDetailsLog + '\n' + 'Products excluded from Calculator:\n' + freightEstimatorDataWrapper.skippedProductsLog + '\n Woodcrate cost: ' +freightEstimatorDataWrapper.woodCrateCost +'\n LTP cost: '+freightEstimatorDataWrapper.longTermCost;  
+            			// //cc_ST_LogUtil.createRecord('B2BFreightEstimator','getCartonBoxEstimate',freightMockCartonsLog,' ', datetime.now(), datetime.now(), 'SS-ParcelEstimator');
+                        System.debug('CreateFreightLog::'+freightEstimatorDataWrapper);
+                        if(freightEstimatorDataWrapper.cartonboxAssignmentData!=null && !freightEstimatorDataWrapper.cartonboxAssignmentData.isEmpty()){
+                            System.debug('CreateFreightLog::');
+                            // //cc_ST_LogUtil.createFreightEstimatorOutputLog(JSON.serialize(freightEstimatorDataWrapper.cartonboxAssignmentData),cartId);
+                        } else{
+                            //  //cc_ST_LogUtil.clearFreightEstimatorOutputLog(cartId);
+                        }
+                    }else{
+                        // //cc_ST_LogUtil.clearFreightEstimatorOutputLog(cartId);
+                    }
+           
+                }
+
+                
+                // resp.data = response;
+                System.debug('resp.data>>>'+ response);
+                if (response != null) {
+                    resp = new B2BActionResponse(true, 'Success', response);                    
+                }   
+
+            } catch (Exception e) {
+                if(freightEstimatorDataWrapper!=null){
+                    //cc ST Logs for estimated carton boxes, assignment and skipped products weighing zero
+                    String freightMockCartonsLog = 'Freight Mock Cartons : ' + freightEstimatorDataWrapper.cartonDetailsLog + '\n' + 'Products excluded from Calculator:\n' + freightEstimatorDataWrapper.skippedProductsLog + '\n Woodcrate cost: ' +freightEstimatorDataWrapper.woodCrateCost +'\n LTP cost: '+freightEstimatorDataWrapper.longTermCost;  
+                    // //cc_ST_LogUtil.createRecord('B2BFreightEstimator','getCartonBoxEstimate',freightMockCartonsLog,' ', datetime.now(), datetime.now(), 'SS-ParcelEstimator');
+                }
+                 System.debug('**********************Exception**************'+e.getStackTraceString());
+            	System.debug('Exception at:'+e.getLineNumber()+' Exception message:'+e.getMessage());
+                // //cc_ST_LogUtil.createRecordForFailuresNonFuture
+                //         (
+                //             className,
+                //             methodName,
+                //             e.getMessage(),
+                //             'transactionId: '+ cartId, 
+                //             datetime.now(), 
+                //             datetime.now(),
+                //             cc_ST_StaticConstants.APIFailure,
+                //             cc_ST_StaticConstants.FREIGHTCHECK_FAILURE_CASE_REASON,
+                //             '', 
+                //             cc_ST_StaticConstants.CASE_CATEGORY 
+                //         );
+
+                // resp.data = null;
+                // resp.success = false;
+                resp = new B2BActionResponse(false, e.getMessage(), null);
+            }
+        } else {
+            // else if there is International Customer the price should be 0 and no call to Freight API
+          /*  B2BFreightCalculator.ShippingOptionWrapper shippingOptionForIntermational = new B2BFreightCalculator.ShippingOptionWrapper();
+            shippingOptionForIntermational.Type = B2BFreightCalculator.Shipment.STANDARD;
+            shippingOptionForIntermational.Price = '0';
+            List<FreightWrapper> shippingOptionsWrapper = buildFreightWrappers(new List<B2BFreightCalculator.ShippingOptionWrapper>{shippingOptionForIntermational});
+            response.put('shippingOptions',shippingOptionsWrapper);
+            resp.data = response;
+            resp.success = true;*/
+            try {
+
+                 //turns ON/OFf the freight Estimatior calculation until LN is ready
+                if((System.Label.cc_ST_FreightEstCalcSwitch).equals('ON')){
+
+                    if (String.isBlank(cartId)) {
+                        throw new cc_ST_CustomException(CARTID_ERROR);
+                    }
+
+                    // Get Cart Items
+                    List<CartItem> cartItems = [
+                            SELECT id,  NetUnitPrice, Product2Id, Product2.StockKeepingUnit,
+                                Product2.B2B_UNITOFMEASURE__c, Product2.B2B_WEIGHT__c,
+                                Quantity ,  CartId,  
+                                Product2.B2B_PACK_QUANTITY__c,Product2.QuantityUnitOfMeasure,
+                                Product2.B2B_HEIGHT__c, Product2.B2B_WIDTH__c, Product2.B2B_LENGTH__c
+                            FROM CartItem 
+                            WHERE CartId = :cartId
+                        ];
+                    List<WebCart> cartObj = [
+                            SELECT B2B_ShipTo_MDM_LNID__c,	B2B_Intermediate_MDM_LNID__c 
+                            FROM WebCart 
+                            WHERE Id = :cartId
+                        ];
+
+                    // WebCart cartObj = new WebCart(Id = cartId);
+                    
+                    // if (cartObj.isEmpty() || cartObj == null) {
+                    //     throw new cc_ST_CustomException(CONTACT_ADDRESS_ERROR);
+                    // }
+                    
+                    //preparing the product related information 
+                    List<B2BFreightEstimator.cartItemsInfo> productsInfo = new List<B2BFreightEstimator.cartItemsInfo>();
+                    for (CartItem cartItem:cartItems){
+                        B2BFreightEstimator.cartItemsInfo prodInfo = new B2BFreightEstimator.cartItemsInfo();
+                        prodInfo.cartId = cartItem.CartId;
+                        prodInfo.quantity = cartItem.Quantity;
+                        prodInfo.sku	= cartItem.Product2.StockKeepingUnit;
+                        prodInfo.weight = cartItem.Product2.B2B_WEIGHT__c;
+                        prodInfo.height = cartItem.Product2.B2B_HEIGHT__c;
+                        prodInfo.width = cartItem.Product2.B2B_WIDTH__c;
+                        prodInfo.length = cartItem.Product2.B2B_LENGTH__c;
+                        prodInfo.qtyPerUnit = cartItem.Product2.B2B_PACK_QUANTITY__c;
+                        prodInfo.uom = cartItem.Product2.QuantityUnitOfMeasure;
+                        productsInfo.add(prodInfo);
+                    }
+                    //Calculate the Carton estimation for the cartItems and also include woodCrate and LongTerm Pcakaging costs estimated for the parcels
+                    B2BFreightEstimator.cartonBoxEstimatorData estimatedCartonsData = B2BFreightEstimator.getCartonBoxEstimate(productsInfo);
+                    if(estimatedCartonsData!=null && !estimatedCartonsData.cartonboxAssignmentData.isEmpty()){
+                        response.freightEstimatorCartonData = estimatedCartonsData.cartonboxAssignmentData;
+                    } 
+                    //Variable with all freight estimator information 
+                        freightEstimatorDataWrapper = estimatedCartonsData;
+
+                    List<B2BFreightCalculator.ShippingOptionWrapper> packagingOptions = new List<B2BFreightCalculator.ShippingOptionWrapper>();
+                    if(freightEstimatorDataWrapper!=null){
+                        B2BFreightCalculator.ShippingOptionWrapper option = new B2BFreightCalculator.ShippingOptionWrapper();
+                        option.Type = B2BFreightCalculator.Shipment.CARDBOARD;
+                        option.Price = String.valueOf(0.00);
+                        packagingOptions.add(option);
+                    }
+                    if(freightEstimatorDataWrapper!=null &&  freightEstimatorDataWrapper.woodCrateCost!= 0){
+                        B2BFreightCalculator.ShippingOptionWrapper option = new B2BFreightCalculator.ShippingOptionWrapper();
+                        option.Type = B2BFreightCalculator.Shipment.WOODCRATE;
+                        Decimal price = freightEstimatorDataWrapper.woodCrateCost.setScale(2,RoundingMode.HALF_UP);
+                        System.debug('woodCrateCost-price-->'+price);
+                        //160805:Apply currency conversion(USD-EUR) for Distributor user to resolve cache issue on UI
+                        if(FeatureManagement.checkPermission('IsDistributor')&& currencyFactor > 0){
+                            price = (((100-currencyFactor)/100)* price).setScale(2,RoundingMode.HALF_UP) ;
+                        }
+                        option.Price = String.valueOf(price);
+                        packagingOptions.add(option);
+                    }
+                    if(freightEstimatorDataWrapper!=null && freightEstimatorDataWrapper.longTermCost!=0){
+                        B2BFreightCalculator.ShippingOptionWrapper option = new B2BFreightCalculator.ShippingOptionWrapper();
+                        option.Type = B2BFreightCalculator.Shipment.LONGTERM;
+                        Decimal price = freightEstimatorDataWrapper.longTermCost.setScale(2,RoundingMode.HALF_UP);
+                        System.debug('longTermCost-price-->'+price);
+                        //160805:Apply currency conversion(USD-EUR) for Distributor user to resolve cache issue on UI
+                        if(FeatureManagement.checkPermission('IsDistributor')&& currencyFactor > 0){
+                            price = (((100-currencyFactor)/100)* price).setScale(2,RoundingMode.HALF_UP) ;
+                        }
+                        option.Price = String.valueOf(price);
+                        packagingOptions.add(option);
+                    }   
+                    
+                    //added freight special Packaging prices to UI
+                    List<FreightWrapper> packagingOptionsWrapper= buildFreightWrappers(packagingOptions);
+                    response.packagingOptions = packagingOptionsWrapper;
+                    
+                    if(freightEstimatorDataWrapper!=null){
+                     //cc ST Logs for estimated carton boxes, assignment and skipped products weighing zero
+            			String freightMockCartonsLog = 'Freight Mock Cartons : ' + freightEstimatorDataWrapper.cartonDetailsLog + '\n' + 'Products excluded from Calculator:\n' + freightEstimatorDataWrapper.skippedProductsLog + '\n Woodcrate cost: ' +freightEstimatorDataWrapper.woodCrateCost +'\n LTP cost: '+freightEstimatorDataWrapper.longTermCost;  
+            			//cc_ST_LogUtil.createRecord('B2BFreightEstimator','getCartonBoxEstimate',freightMockCartonsLog,' ', datetime.now(), datetime.now(), 'SS-ParcelEstimator');
+                        System.debug('CreateFreightLog::'+freightEstimatorDataWrapper);
+                        if(freightEstimatorDataWrapper.cartonboxAssignmentData!=null && !freightEstimatorDataWrapper.cartonboxAssignmentData.isEmpty()){
+                            //cc_ST_LogUtil.createFreightEstimatorOutputLog(JSON.serialize(freightEstimatorDataWrapper.cartonboxAssignmentData),cartId);
+                        } else{
+                             //cc_ST_LogUtil.clearFreightEstimatorOutputLog(cartId);
+                        }
+                    }else{
+                        //cc_ST_LogUtil.clearFreightEstimatorOutputLog(cartId);
+                    }
+                }
+                    // else if there is International Customer the price should be 0 and no call to Freight API
+                    B2BFreightCalculator.ShippingOptionWrapper shippingOptionForIntermational = new B2BFreightCalculator.ShippingOptionWrapper();
+                    shippingOptionForIntermational.Type = B2BFreightCalculator.Shipment.STANDARD;
+                    shippingOptionForIntermational.Price = '0';
+                    List<FreightWrapper> shippingOptionsWrapper = buildFreightWrappers(new List<B2BFreightCalculator.ShippingOptionWrapper>{shippingOptionForIntermational});
+                    response.shippingOptions = shippingOptionsWrapper;
+                    System.debug('shippingoption@@@'+response);
+                    // resp.data = response;
+                    // resp.success = true;
+                    if(response != null){
+                        resp = new B2BActionResponse(true, 'Success', response);
+
+                    }
+            }catch(Exception e){
+                if(freightEstimatorDataWrapper!=null){
+                    //cc ST Logs for estimated carton boxes, assignment and skipped products weighing zero
+                    String freightMockCartonsLog = 'Freight Mock Cartons : ' + freightEstimatorDataWrapper.cartonDetailsLog + '\n' + 'Products excluded from Calculator:\n' + freightEstimatorDataWrapper.skippedProductsLog + '\n Woodcrate cost: ' +freightEstimatorDataWrapper.woodCrateCost +'\n LTP cost: '+freightEstimatorDataWrapper.longTermCost;  
+                    //cc_ST_LogUtil.createRecord('B2BFreightEstimator','getCartonBoxEstimate',freightMockCartonsLog,' ', datetime.now(), datetime.now(), 'SS-ParcelEstimator');
+                }
+                 System.debug('**********************Exception**************'+e.getStackTraceString());
+            	System.debug('Exception at:'+e.getLineNumber()+' Exception message:'+e.getMessage());
+                //cc_ST_LogUtil.createRecordForFailuresNonFuture
+                        // (
+                        //     className,
+                        //     methodName,
+                        //     e.getMessage(),
+                        //     'transactionId: '+ cartId, 
+                        //     datetime.now(), 
+                        //     datetime.now(),
+                        //     cc_ST_StaticConstants.APIFailure,
+                        //     cc_ST_StaticConstants.FREIGHTCHECK_FAILURE_CASE_REASON,
+                        //     '', 
+                        //     cc_ST_StaticConstants.CASE_CATEGORY 
+                        // );
+
+                // resp.data = null;
+                // resp.success = false;
+                resp = new B2BActionResponse(false, e.getMessage(), null);
+            } 
+
+        }
+
+        return resp;
+    }
+
+
+    /**
+     * @Description Method to prettify label for selected Shipping Method in case Quote to Order
+     * @return FreightWrapper Wrapper with label values
+     */
+    @AuraEnabled
+    public static B2BActionResponse getFriendlyLabel( String shippingMethodType) {
+        B2BActionResponse resp;
+        FreightWrapper wrapper = new FreightWrapper();
+
+        if (shippingMethodType == cc_ST_StaticConstants.SHIPMENT_LABEL_STANDARD) {
+            wrapper.shippingLabel = System.Label.cc_ST_StandardDeliveryLabel;
+            wrapper.friendlyLabel = System.Label.cc_ST_StandardDeliveryNoDaysLabel;
+        }
+        else if (shippingMethodType == cc_ST_StaticConstants.SHIPMENT_LABEL_2DAY) {
+            wrapper.shippingLabel = System.Label.cc_ST_Day2DeliveryLabel;
+            wrapper.friendlyLabel = System.Label.cc_ST_Day2DeliveryNoDaysLabel;
+        }
+        else if (shippingMethodType == cc_ST_StaticConstants.SHIPMENT_LABEL_1DAY) {
+            wrapper.shippingLabel = System.Label.cc_ST_Day1DeliveryLabel;
+            wrapper.friendlyLabel = System.Label.cc_ST_Day1DeliveryNoDaysLabel;
+        } 
+        else if (shippingMethodType == cc_ST_StaticConstants.SHIPMENT_LABEL_CARDBOARD) {
+            wrapper.shippingLabel = System.Label.cc_ST_CardBoardPackagingLabel;
+            wrapper.friendlyLabel = '';
+        } 
+        else if (shippingMethodType == cc_ST_StaticConstants.SHIPMENT_LABEL_WOODBOX) {
+            wrapper.shippingLabel = System.Label.cc_ST_WoodCratePackagingLabel;
+            wrapper.friendlyLabel = System.Label.cc_ST_SpecialPackagingLabel;
+        } 
+        else if (shippingMethodType == cc_ST_StaticConstants.SHIPMENT_LABEL_LTP) {
+            wrapper.shippingLabel = System.Label.cc_ST_LongTermPreservationPackagingLabel;
+            wrapper.friendlyLabel = System.Label.cc_ST_SpecialPackagingLabel;
+        }
+
+        // resp.data = wrapper;
+        if(wrapper != null){
+            resp = new B2BActionResponse(true, '', wrapper);
+        }
+        return resp;
+    }
+
+
+    /**
+     * @Description Method to re-wrap data to UI wrapper
+     * @param ShippingOptionWrapper List of Shipping Options and freight cost
+     * @return List<FreightApiWrapper> Re-wrapped shipping options to fit UI format
+     */
+    public static List<FreightWrapper> buildFreightWrappers(List<B2BFreightCalculator.ShippingOptionWrapper> ShippingOptions) {
+        System.debug('ShippingOptions>'+ShippingOptions);
+        List<FreightWrapper> listOfFreightWraps = new List<FreightWrapper>();
+        FreightWrapper iFreightWrapper;
+        
+        Hide_Punchout_Shipping_Option__mdt configData = null;//= hideShippingConfig(); //PBI:160134:commenting out this logic as part Freight2.0
+        for (B2BFreightCalculator.ShippingOptionWrapper iShippingOption : ShippingOptions) {
+            // Wrapper for Standard Delivery
+            iFreightWrapper = new FreightWrapper();
+            if (iShippingOption.Type == B2BFreightCalculator.Shipment.STANDARD && (configData == null  || !configData.Standard__c) ) {
+                iFreightWrapper.shippingLabel   = System.Label.cc_ST_StandardDeliveryLabel;
+                iFreightWrapper.friendlyLabel   = System.Label.cc_ST_StandardDeliveryNoDaysLabel;
+                iFreightWrapper.label           = cc_ST_StaticConstants.SHIPMENT_LABEL_STANDARD;
+                iFreightWrapper.oitem           = B2BFreightCalculator.getShipmentCode(iFreightWrapper.label);
+                iFreightWrapper.option          = cc_ST_StaticConstants.SHIPMENT_OPTION_STANDARD;
+                iFreightWrapper.type            = cc_ST_StaticConstants.SHIPMENT_TYPE_STANDARD;
+                Decimal price = Decimal.valueOf(iShippingOption.Price);
+                //160805:Apply currency conversion(USD-EUR) for Distributor user to resolve cache issue on UI
+                if(FeatureManagement.checkPermission('IsDistributor')&& currencyFactor > 0){
+                    price = (((100-currencyFactor)/100)* price).setScale(2,RoundingMode.HALF_UP) ;
+                }
+                iFreightWrapper.price           = String.valueOf(price);
+                iFreightWrapper.position        = 1;
+                listOfFreightWraps.add(iFreightWrapper);
+            }
+            // Wrapper for 2 Day Delivery
+            else if (iShippingOption.Type == B2BFreightCalculator.Shipment.DAY2 && (configData == null  ||!configData.Two_Days__c)) {
+                iFreightWrapper.shippingLabel   = System.Label.cc_ST_Day2DeliveryLabel;
+                iFreightWrapper.friendlyLabel   = System.Label.cc_ST_Day2DeliveryNoDaysLabel;
+                iFreightWrapper.label           = cc_ST_StaticConstants.SHIPMENT_LABEL_2DAY;
+                iFreightWrapper.oitem           = B2BFreightCalculator.getShipmentCode(iFreightWrapper.label);
+                iFreightWrapper.option          = cc_ST_StaticConstants.SHIPMENT_OPTION_2DAY;
+                iFreightWrapper.type            = cc_ST_StaticConstants.SHIPMENT_TYPE_2DAY;
+                Decimal price = Decimal.valueOf(iShippingOption.Price);
+                //160805:Apply currency conversion(USD-EUR) for Distributor user to resolve cache issue on UI
+                if(FeatureManagement.checkPermission('IsDistributor')&& currencyFactor > 0){
+                    price = (((100-currencyFactor)/100)* price).setScale(2,RoundingMode.HALF_UP) ;
+                }
+                iFreightWrapper.price           = String.valueOf(price);
+                iFreightWrapper.position        = 2;
+                listOfFreightWraps.add(iFreightWrapper);
+            }
+            // Wrapper for 1 Day Delivery
+            else if (iShippingOption.Type == B2BFreightCalculator.Shipment.DAY1 && (configData == null ||!configData.Next_Day__c)) {
+                iFreightWrapper.shippingLabel   = System.Label.cc_ST_Day1DeliveryLabel;
+                iFreightWrapper.friendlyLabel   = System.Label.cc_ST_Day1DeliveryNoDaysLabel;
+                iFreightWrapper.label           = cc_ST_StaticConstants.SHIPMENT_LABEL_1DAY; //'Next Day Delivery';
+                iFreightWrapper.oitem           = B2BFreightCalculator.getShipmentCode(iFreightWrapper.label);
+                iFreightWrapper.option          = cc_ST_StaticConstants.SHIPMENT_OPTION_1DAY;
+                iFreightWrapper.type            = cc_ST_StaticConstants.SHIPMENT_TYPE_1DAY;
+                Decimal price = Decimal.valueOf(iShippingOption.Price);
+                //160805:Apply currency conversion(USD-EUR) for Distributor user to resolve cache issue on UI
+                if(FeatureManagement.checkPermission('IsDistributor')&& currencyFactor > 0){
+                    price = (((100-currencyFactor)/100)* price).setScale(2,RoundingMode.HALF_UP) ;
+                }
+                iFreightWrapper.price           = String.valueOf(price);
+                iFreightWrapper.position        = 3;
+                listOfFreightWraps.add(iFreightWrapper);
+            }
+            // wrapper for cardboard packaging option
+            else if (iShippingOption.Type == B2BFreightCalculator.Shipment.CARDBOARD) {
+                iFreightWrapper.shippingLabel   = System.Label.cc_ST_CardBoardPackagingLabel;
+                iFreightWrapper.friendlyLabel   = '';
+                iFreightWrapper.label           = cc_ST_StaticConstants.SHIPMENT_LABEL_CARDBOARD; //'Card Board';
+                iFreightWrapper.oitem           = B2BFreightCalculator.getShipmentCode(iFreightWrapper.label);
+                iFreightWrapper.option          = cc_ST_StaticConstants.SHIPMENT_OPTION_CARDBOARD;
+                iFreightWrapper.type            = cc_ST_StaticConstants.SHIPMENT_TYPE_CARDBOARD;
+                iFreightWrapper.price           = iShippingOption.Price;
+                iFreightWrapper.position        = 1;
+                listOfFreightWraps.add(iFreightWrapper);
+            }
+            // wrapper for woodcrate packaging option
+            else if (iShippingOption.Type == B2BFreightCalculator.Shipment.WOODCRATE) {
+                iFreightWrapper.shippingLabel   = System.Label.cc_ST_WoodCratePackagingLabel;
+                iFreightWrapper.friendlyLabel   = System.Label.cc_ST_SpecialPackagingLabel;
+                iFreightWrapper.label           = cc_ST_StaticConstants.SHIPMENT_LABEL_WOODBOX; //'Wood Crate';
+                iFreightWrapper.oitem           = B2BFreightCalculator.getShipmentCode(iFreightWrapper.label);
+                iFreightWrapper.option          = cc_ST_StaticConstants.SHIPMENT_OPTION_WOODBOX;
+                iFreightWrapper.type            = cc_ST_StaticConstants.SHIPMENT_TYPE_WOODBOX;
+                iFreightWrapper.price           = iShippingOption.Price;
+                iFreightWrapper.position        = 2;
+                listOfFreightWraps.add(iFreightWrapper);
+            }
+            // wrapper for longTermPreservation packaging option
+            else if (iShippingOption.Type == B2BFreightCalculator.Shipment.LONGTERM) {
+                iFreightWrapper.shippingLabel   =  System.Label.cc_ST_LongTermPreservationPackagingLabel;
+                iFreightWrapper.friendlyLabel   =  System.Label.cc_ST_SpecialPackagingLabel;
+                iFreightWrapper.label           =  cc_ST_StaticConstants.SHIPMENT_LABEL_LTP; //'LongTermpreservation';
+                iFreightWrapper.oitem           =  B2BFreightCalculator.getShipmentCode(iFreightWrapper.label);
+                iFreightWrapper.option          =  cc_ST_StaticConstants.SHIPMENT_OPTION_LTP;
+                iFreightWrapper.type            =  cc_ST_StaticConstants.SHIPMENT_TYPE_LTP;
+                iFreightWrapper.price           =  iShippingOption.Price;
+                iFreightWrapper.position        = 3;
+                listOfFreightWraps.add(iFreightWrapper);
+            }
+        }
+
+        // sort implemented by iFreightWrapper.oitem value
+        listOfFreightWraps.sort();
+
+        return listOfFreightWraps;
+    }
+
+    // Changes for PBI no 123462.
+    public static Hide_Punchout_Shipping_Option__mdt hideShippingConfig() {
+        List<Hide_Punchout_Shipping_Option__mdt> hideShippingOptionConfigs = Hide_Punchout_Shipping_Option__mdt.getAll().values() ;
+        User loginUser = [select Contact.Account.ST_Business_Partner_Code__c from User where Id =:UserInfo.getUserId()] ;
+        String BPCodes = loginUser.Contact.Account.ST_Business_Partner_Code__c;
+        
+        for(Hide_Punchout_Shipping_Option__mdt config : hideShippingOptionConfigs) {
+            if(config.BP_Code__c == BPCodes)            
+                return config;        
+        }
+
+        return null;
+    }
+
+    // Wrapper class
+    public class FreightCheckDetail{
+        @AuraEnabled public List<B2BFreightEstimator.cartonboxAssignment> freightEstimatorCartonData;
+        @AuraEnabled public List<FreightWrapper> shippingOptions;
+        @AuraEnabled public List<FreightWrapper> packagingOptions;
+    }
+}
