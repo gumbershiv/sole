@@ -1,0 +1,102 @@
+public Map<String, B2BCartItemDTO> getValidProductIdToLb2bCartItemMap(
+        List<B2BCartItemDTO> lb2bCartItems,
+        Map<String, B2bUtilProduct.productData> skuToProductMap,
+        Id cartId
+    ) {
+        Map<String, B2BCartItemDTO> productIdToLb2bCartItemMap = new Map<String, B2BCartItemDTO>();
+        Integer totalCartItems = [
+                SELECT COUNT()
+                FROM CartItem
+                WHERE CartId =:cartId
+            ];
+
+        // Created a map to store remaining purchase limit 
+        Map<String, Decimal> skuToRemainingLimitMap = new Map<String, Decimal>();
+        Integer i = 1;
+
+        
+        for (B2BCartItemDTO lb2bCartItem : lb2bCartItems) {
+
+            // lb2bCartItems contains all the SKUs appended with "~" .
+            // Need to remove the "~" to get the actual SKU.
+            String skuWithCounter = lb2bCartItem.sku;
+            String cleanedSku = skuWithCounter.contains('~') ? skuWithCounter.split('~')[0] : skuWithCounter;
+            
+            B2bUtilProduct.productData productData = skuToProductMap.get(cleanedSku);
+            
+            // If the SKU is invalid, add error to the DTO and continue to next cart item.
+            if (!skuToProductMap.containsKey(cleanedSku)) {
+                lb2bCartItem.sku = cleanedSku; 
+                lb2bCartItem.isSuccess = false;
+                lb2bCartItem.message = ERROR_INVALID_SKU;
+                lb2bCartItem.setFieldError(LB2BCARTITEM_SKU, ERROR_INVALID_SKU);
+            }else{
+                // Adding the purchase Limit with Relevant SKU to the map
+            if (!skuToRemainingLimitMap.containsKey(cleanedSku) && productData != null) {
+                skuToRemainingLimitMap.put(cleanedSku, productData.purchaseLimit);
+            }
+            
+            // Getting Remaining Limit for the SKU from the map
+            Decimal remainingLimit = skuToRemainingLimitMap.get(cleanedSku);
+            
+            // If any SKU is not sellable add error to the DTO and continue to next cart item.
+            /*if (lb2bCartItem.quantity > remainingLimit && !productData.sellable ) {
+                lb2bCartItem.sku = cleanedSku; 
+                lb2bCartItem.isSuccess = false;
+                lb2bCartItem.message = ERROR_SELLABLE;
+                lb2bCartItem.setFieldError(LB2BCARTITEM_QUANTITY, ERROR_SELLABLE);
+                continue;
+            }*/
+
+            // If any SKU (with quantity greater than purchase limit) is present in the cart
+            // add error to the DTO and continue to next cart item and remaining Limit will not be changed.
+            if(productData.purchaseLimit != 0){
+            if (lb2bCartItem.quantity > remainingLimit) {
+                if(productData.finalPartPurchaseLimit <= 0){
+                    lb2bCartItem.sku = cleanedSku; 
+                    lb2bCartItem.isSuccess = false;
+                    lb2bCartItem.message = ERROR_EXCEEDS_LIMIT;
+                    lb2bCartItem.setFieldError(LB2BCARTITEM_QUANTITY, ERROR_EXCEEDS_LIMIT);
+                }else{
+                    lb2bCartItem.sku = cleanedSku; 
+                    lb2bCartItem.isSuccess = false;
+                    lb2bCartItem.message = ERROR_REPLACEMENT_AVAILABLE;
+                    lb2bCartItem.setFieldError(LB2BCARTITEM_QUANTITY, ERROR_REPLACEMENT_AVAILABLE);
+                }
+                /*lb2bCartItem.sku = cleanedSku; 
+                lb2bCartItem.isSuccess = false;
+                lb2bCartItem.message = ERROR_INVALID_QUANTITY;
+                lb2bCartItem.setFieldError(LB2BCARTITEM_QUANTITY, ERROR_INVALID_QUANTITY);
+                continue;*/
+            } 
+            }
+            else{
+                lb2bCartItem.sku = cleanedSku; 
+                lb2bCartItem.isSuccess = false;
+                lb2bCartItem.message = ERROR_ITEM_UNAVAILABLE;
+                lb2bCartItem.setFieldError(LB2BCARTITEM_SKU, ERROR_ITEM_UNAVAILABLE);
+            }
+                // If all validations pass 
+            if (lb2bCartItem.isSuccess == null) {
+                lb2bCartItem.productId = productData.Id;
+
+                // Concating the SKU with the integer to make it unique to allow duplicacy.
+                String uniqueSku = lb2bCartItem.productId + '~' + i;
+                i++;
+                productIdToLb2bCartItemMap.put(uniqueSku, lb2bCartItem);
+
+                // Updating the Map with the updated purchase Limit for the SKU
+                skuToRemainingLimitMap.put(cleanedSku, remainingLimit - lb2bCartItem.quantity);
+                
+            }
+            
+            }
+            
+            
+            
+            
+            
+        }
+        
+        return productIdToLb2bCartItemMap;
+    }
