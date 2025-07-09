@@ -1,0 +1,342 @@
+public class B2BCyberSourceUtility {
+    
+    @TestVisible private static String CYBERSOURCE_CAPTURE_MDT_DEVELOPERNAME = 'B2B_CyberSource_REST_CaptureAPI_Endpoint';
+    public static String DATETIME_STRING, DIGEST_STRING;
+    private static final String CLASS_NAME = 'B2BInvoiceHandler';
+    private static final String INVOICE_ERR_LOGGER = 'B2B_INVOICESYNC_ERR';
+    private static final String SUCCESS = 'SUCCESS';
+    private static final String FAILURE = 'FAILURE';
+    public static final String Cybersource_Failure_Status = 'Cybersource Failure';
+    public static final String Http_Failure_Status = 'Http Failure';
+    
+    /** 
+     * @Description: Method for capturing ang logging payment from Cyber source
+     * @param invoiceDetails total amount of the invoice  
+     * @param customerId  Tokend of the order  
+     * @return response details
+     */
+    public static CaptureAndLogPaymentResponseWrapper CaptureAndLogPayment(B2B_Invoice__c invoiceDetails, String customerId) {
+        
+        HttpRequest req;
+        HttpResponse res;
+        
+        CaptureAndLogPaymentResponseWrapper captureAndLogResponse = new CaptureAndLogPaymentResponseWrapper();
+        Boolean isPaymentCaptured = false;
+        String reqres;
+        String status;
+        
+        CapturePaymentResponseWrapper capturePaymentResponse = capturePayment(invoiceDetails, customerId);
+        Integer httpStatusCode = capturePaymentResponse.httpResponse.getStatusCode();
+        
+        try {
+            B2B_CyberSource_Payment_Endpoint__mdt captureAPIEndPoint = B2B_CyberSource_Payment_Endpoint__mdt.getInstance(CYBERSOURCE_CAPTURE_MDT_DEVELOPERNAME);
+            String endpoint = captureAPIEndPoint.B2B_PaymentEndpointURI__c;
+            
+            captureAndLogResponse.transactionId = (String) capturePaymentResponse.cybersourceResponse.get('id');
+            Map < String, Object > paymentInformation = (Map < String, Object > ) capturePaymentResponse.cybersourceResponse.get('paymentInformation');
+            
+            if (paymentInformation != null) {
+                Map < String, Object > customerInfo = (Map < String, Object > ) paymentInformation.get('customer');
+                if (customerInfo != null) {
+                    captureAndLogResponse.customerId = (String) paymentInformation.get('id');
+                }
+            }
+            
+            if (httpStatusCode >= 200 && httpStatusCode < 300) {
+                isPaymentCaptured = true;
+                Map < String, Object > errorInformation = (Map < String, Object > ) capturePaymentResponse.cybersourceResponse.get('errorInformation');
+                reqres = 'request : ' + capturePaymentResponse.httpRequest + ', ' + 'response :' + capturePaymentResponse.cybersourceResponse;
+                
+                if (errorInformation != null) {
+                    Map < String, Object > processorInformation = (Map < String, Object > ) capturePaymentResponse.cybersourceResponse.get('processorInformation');
+                    B2BLoggingUtil.error(
+                        INVOICE_ERR_LOGGER, 
+                        CLASS_NAME, 
+                        'CaptureAndLogPayment', 
+                        0, 
+                        Cybersource_Failure_Status, 
+                        reqres
+                    );
+                }
+            }
+            if (httpStatusCode >= 400 && httpStatusCode <= 500) {
+                reqres = 'request : ' + capturePaymentResponse.httpRequest + ', ' + 'Http response :' + capturePaymentResponse.httpResponse + ', ' + 'Cybersource response :' + capturePaymentResponse.cybersourceResponse;
+                isPaymentCaptured = false;
+                B2BLoggingUtil.error(
+                    INVOICE_ERR_LOGGER, 
+                    CLASS_NAME, 
+                    'CaptureAndLogPayment', 
+                    0, 
+                    Http_Failure_Status, 
+                    reqres
+                );
+            }
+            captureAndLogResponse.isPaymentCaptured = isPaymentCaptured;
+        } catch (Exception e) {
+            B2BLoggingUtil.error(
+                INVOICE_ERR_LOGGER, 
+                CLASS_NAME, 
+                'CaptureAndLogPayment', 
+                0, 
+                'Error message: ' + e.getMessage() + 'Line No:' + e.getLineNumber(), 
+                null
+            );
+        } finally {
+            B2BLoggingUtil.flush();
+        }
+        return captureAndLogResponse;
+    }
+
+     /** 
+     * @Description: Method for capturing payment from Cyber source
+     * @param invoiceDetails total amount of the invoice  
+     * @param customerId  Tokend of the order  
+     * @return response details
+     */
+    private static CapturePaymentResponseWrapper capturePayment(B2B_Invoice__c invoiceDetails, String customerId) {
+        CapturePaymentResponseWrapper capturePaymentResponse = new CapturePaymentResponseWrapper();
+        try {
+            B2B_CyberSource_Payment_Endpoint__mdt captureAPIEndPoint = B2B_CyberSource_Payment_Endpoint__mdt.getInstance(CYBERSOURCE_CAPTURE_MDT_DEVELOPERNAME);
+            String reqTarget = captureAPIEndPoint.B2B_PaymentEndpointURI__c;
+            
+            CyberSourcePayload payload = new CyberSourcePayload(invoiceDetails.Name, String.valueOf(invoiceDetails.B2B_Amount__c), customerId);
+            String reqBody = JSON.serializePretty(payload);
+            reqBody = reqBody.replace('_x', ''); 
+            HttpRequest req = generatePostRequest(reqTarget, reqBody);
+            Http objHttp = new Http();
+            capturePaymentResponse.httpRequest = req;
+            capturePaymentResponse.httpResponse = objHttp.send(req);
+            capturePaymentResponse.cybersourceResponse = (Map < String, Object > ) JSON.deserializeUntyped(capturePaymentResponse.httpResponse.getBody());
+            
+        } catch (Exception e) {
+            B2BLoggingUtil.error(
+                INVOICE_ERR_LOGGER, 
+                CLASS_NAME, 
+                'CaptureAndLogPayment', 
+                0, 
+                'Error message: ' + e.getMessage() + 'Line No:' + e.getLineNumber(), 
+                null
+            );
+        }
+        return capturePaymentResponse;
+    }
+
+    // --- HTTP Request Helper Methods ---
+    /** 
+     * @Description: Method to Generate a POST request to the specified endpoint and sets the body
+     * @param reqTarget endpoint Uri  
+     * @param reqBody  request body 
+     * @return httprequest details
+     */
+    private static HttpRequest generatePostRequest(String reqTarget, String reqBody) {
+        HttpRequest req = generateRequestBase(reqTarget, 'POST');
+        
+        //POST requests
+        String digestString = generateDigest(reqBody);
+        String signatureString = generateSignature('post', reqTarget, digestString);
+
+        req.setHeader('digest', digestString);
+        req.setHeader('signature', signatureString);
+        req.setBody(reqBody);
+
+        return req;
+    }
+
+    /** 
+     * @Description: Method to Generate a base HTTP Request with common headers set (basic structure for GET and POST methods)
+     * @param reqTarget endpoint Uri  
+     * @param reqMethod request method
+     * @return httprequest details
+     */
+    private static HttpRequest generateRequestBase(String reqTarget, String reqMethod) {
+        B2B_CyberSource_Payment_Endpoint__mdt captureAPIEndPoint = B2B_CyberSource_Payment_Endpoint__mdt.getInstance(CYBERSOURCE_CAPTURE_MDT_DEVELOPERNAME);
+        HttpRequest req = new HttpRequest();
+
+        req.setMethod(reqMethod);
+        req.setEndpoint('callout:cc_ST_CyberSource_REST_API' + reqTarget);
+
+        req.setHeader('host', captureAPIEndPoint.B2B_Host__c);
+        req.setHeader('v-c-merchant-id', captureAPIEndPoint.B2B_MerchantId__c);
+        req.setHeader('Content-Type', 'application/json');
+
+        setDateTimeString();
+        req.setHeader('v-c-date', DATETIME_STRING);
+
+        return req;
+    }
+
+    /** 
+     * @Description: Method to Set the DATETIME_STRING to the current time in RCF format
+     */
+    private static void setDateTimeString() {
+        DATETIME_STRING = String.valueOf(Datetime.now().formatGmt('EEE, dd MMM yyyy HH:mm:ss z'));
+    }
+
+    /** 
+     * @Description: Method to Generates a Hash of the request body (Digest header)
+     * @param reqBody api request payload
+     * @return digest string
+     */
+    private static String generateDigest(String reqBody) {
+        Blob digestHash = Crypto.generateDigest('SHA-256', Blob.valueOf(reqBody));
+        String digestString = 'SHA-256=' + EncodingUtil.base64Encode(digestHash);
+        return digestString;
+    }
+
+
+    // --- Signature Helper Methods ---
+    /** 
+     * @Description: Method wrapping helper methods to create and return the string that will be set for the Signature header
+     * @param reqType api request type
+     * @param reqTarget endpoint uri
+     * @param digestString digest string
+     * @return signature
+     */
+    private static String generateSignature(String reqType, String reqTarget, String digestString) {
+        String signatureHeaders = generateSignatureHeaders(reqType, reqTarget, digestString);
+        String signatureHash = generateSignatureHash(signatureHeaders);
+        return generateSignatureString(reqType, signatureHash);
+    }
+
+    /** 
+     * @Description: Generates the (host date (request-target) digest v-c-merchant-id) string
+     * @param reqType api request type
+     * @param reqTarget endpoint uri
+     * @param digestString digest string
+     * @return signature headers
+     */
+    private static String generateSignatureHeaders(String reqType, String reqTarget, String digestString) {
+        String headerFields = '';
+        B2B_CyberSource_Payment_Endpoint__mdt captureAPIEndPoint = B2B_CyberSource_Payment_Endpoint__mdt.getInstance(CYBERSOURCE_CAPTURE_MDT_DEVELOPERNAME);
+        //Add host
+        headerFields += ('host: ' + captureAPIEndPoint.B2B_Host__c + '\n');
+
+        headerFields += 'v-c-date: ' + DATETIME_STRING + '\n';
+
+        //Add (request-target)
+        headerFields += ('request-target: ' + reqType + ' ' + reqTarget + '\n');
+
+        //Add digest (for POST requests only)
+        if (reqType == 'post') {
+            headerFields += ('digest: ' + digestString + '\n');
+        }
+
+        //Add v-c-merchant-id
+        headerFields += ('v-c-merchant-id: ' + captureAPIEndPoint.B2B_MerchantId__c);
+
+        return headerFields;
+    }
+
+    /** 
+     * @Description: Creates a HmacSHA256 hash of the Signature Header/Value String
+     * @param data  signature headers
+     * @return signature hash
+     */
+    private static String generateSignatureHash(String data) {
+        B2B_CyberSource_Payment_Endpoint__mdt captureAPIEndPoint = B2B_CyberSource_Payment_Endpoint__mdt.getInstance(CYBERSOURCE_CAPTURE_MDT_DEVELOPERNAME);
+        Blob hash = Crypto.generateMac('HmacSHA256', Blob.valueOf(data), EncodingUtil.base64Decode(captureAPIEndPoint.B2B_SharedKey__c));
+        return EncodingUtil.base64Encode(hash);
+    }
+
+    /** 
+     * @Description: Creates the value to be attached to the Signature on the POST request
+     * @param reqType  request type
+     * @param signatureHash  signature hash
+     * @return signature
+     */
+    private static String generateSignatureString(String reqType, String signatureHash) {
+        String signatureString = '';
+        B2B_CyberSource_Payment_Endpoint__mdt captureAPIEndPoint = B2B_CyberSource_Payment_Endpoint__mdt.getInstance(CYBERSOURCE_CAPTURE_MDT_DEVELOPERNAME);
+        signatureString += 'keyid="' + captureAPIEndPoint.B2B_KeyId__c + '", ';
+        signatureString += 'algorithm="HmacSHA256", ';
+        signatureString += 'headers="host';
+
+        //Add in 'date' for POST requests (seems to break GET requests)
+        //UPDATE 2025 always add date
+        //if (reqType == 'post') {
+        signatureString += ' v-c-date';
+        //}
+
+        signatureString += ' request-target';
+
+        //Add in 'digest' for POST requests        
+        if (reqType == 'post') {
+            signatureString += ' digest';
+        }
+
+        signatureString += ' v-c-merchant-id", ';
+        signatureString += 'signature="' + signatureHash + '"';
+
+        return signatureString;
+    }
+    //
+    // --- End of Signature Helper Methods ---
+    // 
+
+    public class CyberSourcePayload {
+        public ClientReferenceInformation clientReferenceInformation;
+        public ProcessingInformation processingInformation;
+        public OrderInformation orderInformation;
+        public PaymentInformation paymentInformation;
+        public CyberSourcePayload(String code, String amount, String paymentToken) {
+            this.clientReferenceInformation = new ClientReferenceInformation();
+            this.clientReferenceInformation.code = code;
+            this.processingInformation = new ProcessingInformation();
+            this.processingInformation.capture = true;
+
+            this.paymentInformation = new PaymentInformation();
+            this.paymentInformation.customer = new PaymentInformationCustomer();
+            this.paymentInformation.customer.customerId = paymentToken;
+            this.orderInformation = new OrderInformation();
+            this.orderInformation.amountDetails = new AmountDetails();
+            this.orderInformation.amountDetails.totalAmount = amount;
+            this.orderInformation.amountDetails.currency_x = UserInfo.getDefaultCurrency();
+        }
+    }
+    public class ClientReferenceInformation {
+        public String code;
+    }
+    public class ProcessingInformation {
+        public Boolean capture;
+    }
+    public class CaptureOptions {
+        public Integer captureSequenceNumber;
+        public Integer totalCaptureCount;
+    }
+    public class OrderInformation {
+        public AmountDetails amountDetails;
+    }
+    public class AmountDetails {
+        public String totalAmount;
+        public String currency_x;
+    }
+    public class PaymentInformation {
+        public PaymentInformationCustomer customer;
+    }
+    public class PaymentInformationCustomer {
+        public String customerId;
+    }
+    public class CyberSourceResponseWrapper {
+        public Integer statusCode;
+        public String status;
+        public String submitTimeUtc;
+        public String transactionId;
+        public String reconciliationId;
+        // only for 400 and 502 responses
+        public String reason;
+        public String message;
+    }
+    public class CapturePaymentResponseWrapper {
+        public HttpResponse httpResponse;
+        public HttpRequest httpRequest;
+        public Map < String, Object > cybersourceResponse;      
+    }
+    public class CaptureAndLogPaymentResponseWrapper {
+        public Boolean isPaymentCaptured;
+        public String logId;
+        public String transactionId;
+        public String customerId;
+    }
+
+
+}
