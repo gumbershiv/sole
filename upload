@@ -1,0 +1,160 @@
+uploadFile(event) {
+        var v = this;
+        const labels = this.labels;
+        v.uploadInfo = [];
+        v.errorMessage = ''; 
+
+        const theFile = event.target.files[0];
+        console.log('theFile', theFile);
+        if (theFile) {
+                       
+            // Create FileReader instance & read uploaded file as text
+            var reader = new FileReader();
+            reader.readAsText(theFile);
+            reader.onload = function (event) {
+                var data = event.target.result;
+                console.log('data', data);
+                console.log('data.length', data.length);
+                if (data && data.length > 0) {
+                    // Check if the uploaded file is a CSV file
+                    console.log('theFile.type', theFile.type);
+                    if (theFile.type == 'text/csv') {
+
+                        v.fileName = theFile.name;
+                        v.fileUploaded = true;
+
+                        // splits the text data into an array of rows
+                        var allRows = data.split(/\r?\n|\r/);
+                        console.log('allRows', allRows);
+                        var start = 1;
+
+                        // Expected CSV header string
+                        let hdrString =
+                            labels.csvHeaderPositionNumber.trim() +
+                            ',' +
+                            labels.csvHeaderQuantity.trim() +
+                            ',' +
+                            labels.csvHeaderSolarPartNumber.trim();
+                    
+                        console.log('Expected Header:', hdrString);
+                        console.log('Actual Header:', allRows[0]);
+
+                        // check if the first row of the CSV file starts with the expected header string & contains exactly three columns
+                        if (allRows[0] && allRows[0].indexOf(hdrString) == 0 && allRows[0].split(',').length === 3) {
+                            start = 1;
+                        } else {
+                            // If actual header doesn't match expected header, display an error message
+                            v.errorMessage = labels.invalidFileFormat;
+                            v.fileUploadError = true;
+                            return;
+                        }
+                    
+                        // If CSV contains more than 999 Products, display error message
+                        if (allRows.length - start > 999) {
+                            v.errorMessage = labels.tooManyItems; 
+                            v.fileUploadError = true;
+                            return;
+                        }
+
+                        // Temporary array for valid data
+                        let tempData = [];
+
+                         // Loop through each row starting from start
+                        for (
+                            var singleRow = start;
+                            singleRow < allRows.length;
+                            singleRow++
+                        ) { 
+                            // Skip empty or whitespace-only rows or rows with only empty cells
+                            if (
+                                !allRows[singleRow].trim() || 
+                                allRows[singleRow].split(',').every(cell => cell.trim() === '')
+                            ) {
+                                continue;
+                            }
+    
+                            // Split row into cells
+                            var rowCells = allRows[singleRow].split(',');
+                            console.log('rowCells', rowCells);
+                            console.log('rowCells length', rowCells.length);
+
+                            // Ensure row has three cells
+                            if (rowCells.length === 3) {
+                                
+                                // Trim all cells before using them
+                                let [positionNumber, quantity, sku] = rowCells.map(cell => cell.trim());
+                             
+                                // Check for missing fields
+                                if (!positionNumber || !quantity || !sku) {
+                                    console.log('!positionNumber',!positionNumber);
+                                    console.log('!quantity',!quantity);
+                                    console.log('!sku',!sku);
+                                    v.errorMessage = labels.invalidFileContent;
+                                    v.fileUploadError = true;
+                                    return;
+                                }
+
+                                // Validate positionNumber
+                                let positionNum = parseInt(positionNumber);
+                                if (isNaN(positionNum) || positionNum <= 0) {
+                                    v.errorMessage = labels.invalidFileContent;
+                                    v.fileUploadError = true;
+                                    return;
+                                }
+
+                                // Check for duplicate positionNumber
+                                if (tempData.some(item => parseInt(item.positionNumber) === positionNum)) {
+                                    console.log('tempData',tempData);
+                                    console.log('positionNum',positionNum);
+                                    console.log('positionNumber',positionNumber);
+                                    v.errorMessage = labels.invalidFileContent;
+                                    v.fileUploadError = true;
+                                    return;
+                                }
+
+                                // Get the quantity from the second cell
+                                let iQty;
+                                // Parse the quantity as an integer, if parsing fails set quantity to 0
+                                try {
+                                    iQty = parseInt(quantity);
+                                } catch (e) {
+                                    iQty = 0;
+                                }
+
+                                // Handle invalid quantity
+                                if (iQty <= 0 || isNaN(iQty)) {
+                                    console.log('iQty', iQty);
+                                    v.errorMessage = labels.invalidFileContent;
+                                    v.fileUploadError = true;
+                                    return;
+                                } else if (quantity !== null && iQty > 0 && !isNaN(iQty)) {
+                                    // Handle valid quantity & exclude NaN                                
+                                    tempData.push({
+                                        positionNumber,
+                                        quantity,
+                                        sku
+                                    });
+                                }
+                            }
+                        }
+                        
+                        // Sort tempData by positionNumber
+                        tempData.sort((a, b) => parseInt(a.positionNumber) - parseInt(b.positionNumber));
+
+                        // Push sorted data to uploadInfo
+                        tempData.forEach(item => {
+                            v.uploadInfo.push({
+                                quantity: item.quantity,
+                                sku: item.sku,
+                            });
+                        });
+                        console.log('v.uploadInfo', v.uploadInfo);
+                    } else {
+                        v.errorMessage = labels.invalidFileType;
+                        v.fileUploadError = true;
+                        return;
+                    }
+                }
+            };
+        }
+    } 
