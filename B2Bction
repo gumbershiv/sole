@@ -1,0 +1,48 @@
+/**
+ * @author      Ting Li
+ * @company     Capgemini
+ * @description Dto of aura enabled action response
+ * @created     2021-08-19
+ * @version     1.0
+ * @since       52.0 (Force.com ApiVersion)
+ */
+public class B2BActionResponse {
+
+    @AuraEnabled
+    public Boolean isSuccess;
+
+    @AuraEnabled
+    public String message;
+
+    @AuraEnabled
+    public List<String> messages;
+
+    @AuraEnabled
+    public Object data;
+
+    /**
+     * @description action response constructor
+     * 
+     * @param isSuccess     isSuccess
+     * @param message       message
+     * @param data          data
+     */
+    public B2BActionResponse(Boolean isSuccess, String message, Object data) {
+        this.isSuccess = isSuccess;
+        this.message = message;
+        this.data = data;
+    }
+
+    /**
+     * @description action response constructor
+     *
+     * @param isSuccess     isSuccess
+     * @param messages      messages
+     * @param data          data
+     */
+    public B2BActionResponse(Boolean isSuccess, List<String> messages, Object data) {
+        this.isSuccess = isSuccess;
+        this.messages = messages;
+        this.data = data;
+    }
+}
