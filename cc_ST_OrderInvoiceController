@@ -1,121 +1,109 @@
-/* Class Name      : cc_ST_OrderInvoiceController 
-* Description      : This API class is used to fetch PIds of Order Invoices from IDM
-* Created By       : Sangeet Shekhar
-* Created On       : 12/10/2019
+/**
+ * Class Name      : B2B_OrderInvoiceController
+ * Description     : This API class is used to fetch PIds of Order Invoices from IDM.
+ * Created By      : Sangeet Shekhar
+ * Modified By     : [Your Name]
+ * Modified On     : [Today's Date]
+ * Change Summary  : Replaced cc_ST_ with B2B_ and refactored to use B2BActionResponse.
+ */
+global without sharing class B2B_OrderInvoiceController {
 
-* Modification Log:
-* ----------------------------------------------------------------------------------------------------------------
-* Developer                Date                   Description
-* ----------------------------------------------------------------------------------------------------------------
-* 
-*/
-global without sharing class cc_ST_OrderInvoiceController {
+    global B2B_OrderInvoiceController(B2B_OrderLineItems obj) {}
+    global B2B_OrderInvoiceController() {}
 
-global cc_ST_OrderInvoiceController(cc_ST_OrderLineItems obj){}
-    
-    global cc_ST_OrderInvoiceController(){}
+    /**
+     * Method Name    : fetchOrderInvoices
+     * Description    : Fetches PIds of Order Invoices from IDM.
+     * Input          : orderLNID (Order Line Item Id)
+     * Return Type    : B2BActionResponse
+     */
+    @RemoteAction
+    global static B2BActionResponse fetchOrderInvoices(String orderLNID) {
+        try {
+            String reqBody = '';
+            Integer count = 1;
+            List<OrderInvoiceWrapper> orderInvoiceWrapperList = new List<OrderInvoiceWrapper>();
 
-/***************************************************************************************************************************************
-Method Name :    fetchOrderInvoices
-Description :    The method is to fetch the PIds of Order Invoices from IDM.
-Input Parameters : Dom.Document RequestBody
-Return type :    HttpResponse 
-**************************************************************************************************************************************/
-@RemoteAction
-global static ccrz.cc_RemoteActionResult fetchOrderInvoices(final ccrz.cc_RemoteActionContext ctx,String orderLNID){ 
-    ccrz.cc_RemoteActionResult resp = new ccrz.cc_RemoteActionResult();
-    resp.success = false;
-    try {
-      String reqBody ='';
-      Integer count = 1 ;
-      Map<String,String> responseAddMap= new Map<String,String>();
-      List<OrderInvoiceWrapper> orderInvoiceWrapperList =new List<OrderInvoiceWrapper>();
-      AuthenticationAPI__mdt   metaDataEndPoint=[select  Endpoint__c from AuthenticationAPI__mdt where DeveloperName ='QuoteDetailPDFAPI'];
-     String endpoint= metaDataEndPoint.Endpoint__c;
-     endpoint = endpoint.replaceAll('search/item/resource/stream','');
-     System.debug('endpoint--'+endpoint);
-     endpoint= endpoint + System.Label.cc_ST_OrderInvoiceurlParam1 + orderLNID + System.Label.cc_ST_OrderInvoiceUrlParam2;
-     System.debug('endpoint--'+endpoint);
-     HttpResponse res = callfetchPIDs(endpoint);
-     System.debug('res- fetchOrderInvoices --->'+res);
-     System.debug('resBody fetchOrderInvoices --->'+res.getBody()); 
-       /*Start: Error Handling - */    
-            if(res.getStatus()==null && res.getStatusCode()==0){
-                 resp.success = false;
-                 resp.data = 'Error Code'+res.getStatus() ;
-                 
-            }else if(res.getStatusCode() != 200){
-                 resp.success = false;
-                 resp.data = 'Error Code'+res.getStatus() ;
-               
+            // Fetch endpoint from Custom Metadata
+            AuthenticationAPI__mdt metaDataEndPoint = [
+                SELECT Endpoint__c FROM AuthenticationAPI__mdt WHERE DeveloperName = 'QuoteDetailPDFAPI'
+            ];
+            String endpoint = metaDataEndPoint.Endpoint__c;
+            endpoint = endpoint.replaceAll('search/item/resource/stream', '');
+            endpoint += System.Label.cc_ST_OrderInvoiceurlParam1 + orderLNID + System.Label.cc_ST_OrderInvoiceUrlParam2;
+
+            HttpResponse res = callFetchPIDs(endpoint);
+
+            if (res.getStatus() == null && res.getStatusCode() == 0) {
+                return new B2BActionResponse(false, 'Error Code: ' + res.getStatus(), null);
+            } else if (res.getStatusCode() != 200) {
+                return new B2BActionResponse(false, 'Error Code: ' + res.getStatus(), null);
             }
-        /*End: Error Handling */ 
-        else{
-         DOM.Document doc=new DOM.Document();
-         reqBody =res.getBody();
-        // reqBody ='<?xml version="1.0" encoding="UTF-8"?> <items xmlns="http://infor.com/daf"> <searchXQuery>/MDS_Sales_Invoice[@MDS_id3 = "IA0000001"]</searchXQuery> <item> <createdBy>IDM_ION_ADAPTER</createdBy> <createdByName>IDM_ION_ADAPTER</createdByName> <createdTS>2019-06-10T19:42:16Z</createdTS> <lastChangedBy>IDM_ION_ADAPTER</lastChangedBy> <lastChangedByName>IDM_ION_ADAPTER</lastChangedByName> <lastChangedTS>2019-06-10T19:42:16Z</lastChangedTS> <filename>IA0000001.pdf</filename> <size>40060</size> <id>545</id> <version>1</version> <reprItem>filename</reprItem> <displayName>IA0000001.pdf</displayName> <entityName>MDS_Sales_Invoice</entityName> <attrs> <attr> <name>MDS_id1</name> <type>1</type> <qual>MDS_id1</qual> <value>700--52536</value> </attr> <attr> <name>MDS_id2</name> <type>1</type> <qual>MDS_id2</qual> <value>990000002</value> </attr> <attr> <name>MDS_id3</name> <type>1</type> <qual>MDS_id3</qual> <value>IA0000001</value> </attr> <attr> <name>MDS_ID</name> <type>21</type> <qual>MDS_ID</qual> <value>f026b19c-c6b1-4921-b451-eca9465d87ec</value> </attr> </attrs> <resrs> <res> <name/> <size>40060</size> <mimetype>application/pdf</mimetype> <filename>IA0000001.pdf</filename> <url>https://xi.solar.cat.com:9543/ca/api/resources/MDS_Sales_Invoice-545-1-LATEST?$token=Ae8ELr%2Bl0kwEK8%2B0yGExz7CJ3Dr60w9iygE9mN3kMOwn%2FPRM7OXaKuW39LYeeSIePwwGjFaRzBUHq%2BOJ%2Fn6fAHhgUkW5B8lK4MakdETuKm93YmbCc%2BlasbBUT5t3weHcCJkbum0dQD8WWYk3iJNSeWPi483snZnbS%2B0s42ykU%2BkqPpZkhs%2BjAH6ZSvYRUFhTKJWkfZDjqazWNhs6C1u1mRRVAaSsjNng3JnpP69Jt4syPFrd3rPSwUAJbC46pV7nBv7x7DzxWucTbjB%2B1DLeK1BlXNnfWCnTlYiNAZvE5oSVumn1z1s5CtZXEQ%3D%3D&amp;$tenant=infor</url> <sha256>15090aad2d6f92b31c5696e22ea637516808d54287afd1ad183d2a86b7924ca1</sha256> </res> <res> <name>Preview</name> <mimetype>image/png</mimetype> <filename>MDS_Sales_Invoice-545-1-LATEST_Preview.png</filename> <url>https://xi.solar.cat.com:9543/ca/api/resources/MDS_Sales_Invoice-545-1-LATEST/Preview?$token=AcS7uCxka0rOZ5mdf9yxL4IZ12cZfq%2BMiIkTuhGtFajD%2BvtuE67MbIDZG7GIh%2BLySbqNt31Nhc%2BZ15rY6cbycC%2FUbJ4OZJw4ghfvXC2AlbzIlGy72FbsXbPr4fftzfo2EHzchKeV%2Bw2e6fyetissKnCqzcgQ7%2BKh90a5EhRJ%2Bp7lTBxB1Rfp4213qh3zFM6RSS6Bj7yJg1fvxlkroDsWVOh2GNEz4XYB0Sqm1ULc31rWdrLb2F1jRw34gJLgKgLCtAZF5kWHiM8p%2BuPimN1w9Fbku1rFNBbEE7uJcVl%2B7%2BbsAtKfkHE7kUqPJg%3D%3D&amp;$tenant=infor</url> </res> <res> <name>SmallPreview</name> <mimetype>image/png</mimetype> <filename>MDS_Sales_Invoice-545-1-LATEST_SmallPreview.png</filename> <url>https://xi.solar.cat.com:9543/ca/api/resources/MDS_Sales_Invoice-545-1-LATEST/SmallPreview?$token=Ad76RV2OI6UcLoJmWzHidLSCZiR93hV28lRy%2BvAQH9rb5YabSURdHseiG9g2XWmD9WZemJ8Vm16HMaS8EP9HBMFSo5SBuj1fR7yjMkeU%2FHa%2FSDgrlsU%2B%2F69UYOBG5cKWOP7zfy%2F9zzQkYalT4z%2BWY64MSu8BiEyvgdeuQA8p%2BICgQg37IU9T3M7rA4Dc1bbLc4LRnPJVvaHACr8J92Dk1%2BzR5p%2BaQ5UwP4ct2IM09TKfLKuaz5wS9f5Vluu0hGQ7mzxPPZdX8YwhW4hUostEEsEq%2F5TlHkmR7QA95VYCaD%2BQTYCm5NDqNmSHDQ%3D%3D&amp;$tenant=infor</url> </res> <res> <name>Thumbnail</name> <mimetype>image/png</mimetype> <filename>MDS_Sales_Invoice-545-1-LATEST_Thumbnail.png</filename> <url>https://xi.solar.cat.com:9543/ca/api/resources/MDS_Sales_Invoice-545-1-LATEST/Thumbnail?$token=AbA8LayW8WVg35jXqeVnoikV8LPeuf2sZYHZanG2FxDlF5ECAMkf%2BUZEcgKnhQa96gKU7qntseQIJNAueewJIVtC%2FoD84SbCDwbf2onFKp90k7Aw1B5SkHaw9YsWVwbErSv6u9C1WxUQ6prwWcL2%2FxgSRawBZXZS1quRrq7WtLq3msn7NhhhZL1AHgE98RTq3faMoZL77i1amPzc%2Bk%2B%2BTNplMZEU3g3CJDRHPG%2FB0uOU0IrmkQ0jwR7nZmqhQTM0IN%2FgOMevya8AYS37lcRq6tq5eFB8BlS0OyLFY0yWNLmtZewWA1gM9Mwzcw%3D%3D&amp;$tenant=infor</url> </res> </resrs> <acl> <id>8</id> <name>Public Read-Only</name> </acl> </item> <item> <createdBy>IDM_ION_ADAPTER</createdBy> <createdByName>IDM_ION_ADAPTER</createdByName> <createdTS>2019-06-10T19:46:52Z</createdTS> <lastChangedBy>IDM_ION_ADAPTER</lastChangedBy> <lastChangedByName>IDM_ION_ADAPTER</lastChangedByName> <lastChangedTS>2019-10-02T22:37:58Z</lastChangedTS> <filename>IA0000001.pdf</filename> <size>40095</size> <id>554</id> <version>3</version> <reprItem>filename</reprItem> <displayName>IA0000001.pdf</displayName> <entityName>MDS_Sales_Invoice</entityName> <attrs> <attr> <name>MDS_id1</name> <type>1</type> <qual>MDS_id1</qual> <value>700-AR5-70000333</value> </attr> <attr> <name>MDS_id2</name> <type>1</type> <qual>MDS_id2</qual> <value>990000002</value> </attr> <attr> <name>MDS_id3</name> <type>1</type> <qual>MDS_id3</qual> <value>IA0000001</value> </attr> <attr> <name>MDS_ID</name> <type>21</type> <qual>MDS_ID</qual> <value>d717a53f-7a79-4691-a662-fca9aafaaf8e</value> </attr> </attrs> <resrs> <res> <name/> <size>40095</size> <mimetype>application/pdf</mimetype> <filename>IA0000001.pdf</filename> <url>https://xi.solar.cat.com:9543/ca/api/resources/MDS_Sales_Invoice-554-3-LATEST?$token=AXptf69ESSSObeEA1a89hMtAjdwdkSSBmMthvBhkwvHCdc7bSZQQiaWl9qgkeKUIOJfoF4UlSAP%2BLIWP9p72SbN6GB%2FMNJtHD817VtANKCkfRHUiD229TrEXlrHETu4sFphgzzx7I8OelaoMQT2iYi5R1K1EUkB9N0tNJQJtKDQEqR5fupaTZDGWiHWAAEMh0NGrVGeI%2BBO3RAisKbZpSSwfEszDfg45S2ibQCODOzStgTAyY2lE426%2FT34Wkj2ngVtkt40OzG2Wbx6hSqiLevzECFVN71n%2FC25YJRS8Whhbtv7P3FNIjVsS9Q%3D%3D&amp;$tenant=infor</url> <sha256>3d9aad28156fad9528432d93957122000ba4c627b7d149b222012063b1050e34</sha256> </res> <res> <name>Preview</name> <mimetype>image/png</mimetype> <filename>MDS_Sales_Invoice-554-3-LATEST_Preview.png</filename> <url>https://xi.solar.cat.com:9543/ca/api/resources/MDS_Sales_Invoice-554-3-LATEST/Preview?$token=AU%2B2GLyQ4tiDdKuc02UkR3%2BjSxI1IZygRkZTCggpUiGqozRq4vb3WbKbaYGIvqd02iPlwu%2Bpb2QIIomoIW8bO2n6WOl2yYFtKOCeZYvzorYvlBeU51pRc1j%2FlljmHacBzveN7%2FSlbC95C3wLmDQkxJbjsTlnxyNV3rypaQ%2FWYX%2Bz3bruXJsgZ0ztFYjOwKGB5eSMIct8wa4KAGx0QNAJEDgBobQB1Z2OJn4nCDcBJKXK1Y%2BpxB6cbs99VcvLFdq4F%2BRdiPkwF%2FAK15cDknLW5l6kX5JNM6RbbiXVSc4ht%2FagZT7IaA%2Fl0ZlrKA%3D%3D&amp;$tenant=infor</url> </res> <res> <name>SmallPreview</name> <mimetype>image/png</mimetype> <filename>MDS_Sales_Invoice-554-3-LATEST_SmallPreview.png</filename> <url>https://xi.solar.cat.com:9543/ca/api/resources/MDS_Sales_Invoice-554-3-LATEST/SmallPreview?$token=ASET8VAUtWVq7ewH0IIDbcxToMa%2BUNQMPSydcdI6tXw8XDN8aHQkPAviz3l%2BeG6MowMNVOlUg%2BTuItfRyjwY6BpJxGQBEj3h35kpmommB4bC5NXb38%2FxOQAumXKa0MvJa0qJMFuTLMDczUvqPJhJjiu8ZSmFfEvOgSzLfZDcddn1nXTcocz7MacwT8Y3sU2w1HelKGS%2BYzaLNEm%2FoWg7A%2FfM3ImSYZGjPeMSdw%2Fg%2BIV5JS%2BRIJCO3WnuHcCAWGKxFS1q8UFUZ5E4FSqIOEy9fggJG%2BCEF9682C5x6%2FOeIfgaqF8T2U8Ch6Cscg%3D%3D&amp;$tenant=infor</url> </res> <res> <name>Thumbnail</name> <mimetype>image/png</mimetype> <filename>MDS_Sales_Invoice-554-3-LATEST_Thumbnail.png</filename> <url>https://xi.solar.cat.com:9543/ca/api/resources/MDS_Sales_Invoice-554-3-LATEST/Thumbnail?$token=Abceu6f2PbOo79L2t%2BNMFQ6uCyyE2WIaCDrPATcJOUruLkvm8%2Bu%2BHY%2BPPyAxXBx1g2TRiOemHvuYwzizj18wKNx4EP4hU3279uA5s1xSMY3SCbG81X%2BY45IscLrxjKisOUfO2j329EJSmS6EELEvNdovGkKUrI0%2BcOMaHzHiUj%2B98XflRkOSidVYVMAdcYHE3RTMpZbZqY9wZd1n3QzZog4feupDIWStYG8JXYeWzwwQROmlxvYWNOA4uX5iLYTT%2FNOdPauvW%2BnyAfHi34sj8f5asQzSnB%2FAwA1TxH0GQg3AoQVHCaT9%2FKeKOA%3D%3D&amp;$tenant=infor</url> </res> </resrs> <acl> <id>8</id> <name>Public Read-Only</name> </acl> </item> </items>';
-         doc.load(reqBody);
-         DOM.XmlNode rootNode=doc.getRootElement();
-         parseXML(rootNode,count,orderInvoiceWrapperList );
-         System.debug('orderInvoiceWrapperList ----'+orderInvoiceWrapperList );
-         resp.success = true;
-         resp.data = orderInvoiceWrapperList ;
-         }   
-      
-      }catch(Exception ex){
-      resp.success = false;
-      resp.data = 'Exception due to line number: '+ex.getLineNumber()+' Exception Message: '+ex.getMessage();
-       System.debug('Exception in fetchOrderInvoices Parsing:'+ex.getMessage()+' bcs of line number :'+ex.getLineNumber());
-     }
-     
-      return resp;
-   } 
-/***************************************************************************************************************************************
-Method Name :    callTaxAreaIdApi
-Description :    The method is Http Callout to fetch the Tax Area Id.
-Input Parameters : 
-Return type :    HttpResponse 
-**************************************************************************************************************************************/
-public static HttpResponse callfetchPIDs(String endpoint){
-     HttpResponse res=new HttpResponse();
-        try{
-         Map<String,String> requestHeader= cc_ST_LNServiceCallout.getAuthAccessMap();
-         System.debug('requestHeader-->'+requestHeader);
-         if(!Test.isRunningTest()){
-                res= cc_ST_ConstructorServiceCallout.callWebservice(endpoint,'GET','text/xml','',requestHeader);
-         }else{
-                res= cc_ST_ServiceCallout.callWebservice(cc_ST_StaticConstants.TEST_VERTEX_API_ENDPOINT,'GET','','',requestHeader);
-          }
-        
-        }catch(Exception e){
-            ccrz.ccLog.log(System.LoggingLevel.ERROR,'Exception in callfetchPIDs HTTP Callout:'+e.getMessage(),' bcs of line number :'+e.getLineNumber());
-            System.debug('Exception in callfetchPIDs HTTP Callout:'+e.getMessage()+' bcs of line number :'+e.getLineNumber());
+
+            reqBody = res.getBody();
+            DOM.Document doc = new DOM.Document();
+            doc.load(reqBody);
+            DOM.XmlNode rootNode = doc.getRootElement();
+
+            parseXML(rootNode, count, orderInvoiceWrapperList);
+            return new B2BActionResponse(true, 'Order invoices fetched successfully.', orderInvoiceWrapperList);
+
+        } catch (Exception ex) {
+            String errorMsg = 'Exception at line ' + ex.getLineNumber() + ': ' + ex.getMessage();
+            System.debug(errorMsg);
+            return new B2BActionResponse(false, errorMsg, null);
+        }
+    }
+
+    /**
+     * Method Name    : callFetchPIDs
+     * Description    : Makes HTTP GET callout to fetch invoice XML data.
+     * Input          : endpoint (URL to call)
+     * Return Type    : HttpResponse
+     */
+    public static HttpResponse callFetchPIDs(String endpoint) {
+        HttpResponse res = new HttpResponse();
+        try {
+            Map<String, String> requestHeader = B2B_LNServiceCallout.getAuthAccessMap();
+            if (!Test.isRunningTest()) {
+                res = B2B_ConstructorServiceCallout.callWebservice(endpoint, 'GET', 'text/xml', '', requestHeader);
+            } else {
+                res = B2B_ServiceCallout.callWebservice(B2B_StaticConstants.TEST_VERTEX_API_ENDPOINT, 'GET', '', '', requestHeader);
+            }
+        } catch (Exception e) {
+            System.debug('Exception in callFetchPIDs HTTP Callout: ' + e.getMessage() + ' at line: ' + e.getLineNumber());
         }
         return res;
-      }  
-      
- public static void parseXML(DOM.XMLNode node,Integer count,List<OrderInvoiceWrapper> orderInvoiceWrapperList) {
-    try{
-     
-     if(node.getName()=='pid'){
-      OrderInvoiceWrapper orderInvoice= new OrderInvoiceWrapper();
-      orderInvoice.PId= node.getText().trim();
-      orderInvoiceWrapperList.add(orderInvoice);
-     }    
-     for (Dom.XMLNode child: node.getChildElements()) {
-        if(node.getName()=='pid'){
-        count=count+1; 
-        }            
-        parseXML(child,count,orderInvoiceWrapperList);
-       }
-    }catch(Exception e){
-       System.debug('Exception in callfetchPIDs parseXML Method:'+e.getMessage()+' bcs of line number :'+e.getLineNumber());
-     } 
-     
-  }   
-  
-  global class OrderInvoiceWrapper{
-         global String invoiceId;
-         global String PId;
-   }  
+    }
+
+    /**
+     * Method Name    : parseXML
+     * Description    : Recursively parses XML and extracts PId values into the list.
+     */
+    public static void parseXML(DOM.XMLNode node, Integer count, List<OrderInvoiceWrapper> orderInvoiceWrapperList) {
+        try {
+            if (node.getName() == 'pid') {
+                OrderInvoiceWrapper orderInvoice = new OrderInvoiceWrapper();
+                orderInvoice.PId = node.getText().trim();
+                orderInvoiceWrapperList.add(orderInvoice);
+            }
+
+            for (Dom.XMLNode child : node.getChildElements()) {
+                if (node.getName() == 'pid') {
+                    count++;
+                }
+                parseXML(child, count, orderInvoiceWrapperList);
+            }
+        } catch (Exception e) {
+            System.debug('Exception in parseXML: ' + e.getMessage() + ' at line: ' + e.getLineNumber());
+        }
+    }
+
+    /**
+     * DTO class for holding parsed invoice data.
+     */
+    global class OrderInvoiceWrapper {
+        global String invoiceId;
+        global String PId;
+    }
 }
