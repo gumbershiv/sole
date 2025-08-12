@@ -1,0 +1,134 @@
+<template>
+    <template lwc:if={displayData}>
+        <div class={containerClassList}>
+            <!-- <div class="slds-p-around_medium slds-m-around_medium">
+                <c-b2b-package-header></c-b2b-package-header>
+            </div> -->
+            <div lwc:if={showPackageList}>
+                <c-b2b-search-bar-products
+                    all-records={displayData}
+                    onsearchresults={handleFilteredResults}>
+                </c-b2b-search-bar-products>
+                <template iterator:it={filteredList}>
+                    <div key={it.value.id} class={cardClassList} style={cardStyle}>
+                        <c-b2b-search-product-card 
+                            display-data={it.value} 
+                            config={config}
+                            view-mode={config.data.displayMode} 
+                            class={cardInnerClassList} 
+                            page-name ={pageName}>
+                        </c-b2b-search-product-card>
+                    </div>
+                </template>
+            </div>
+            <div lwc:else>
+                <template iterator:it={displayData}>
+                    <div key={it.value.id} class={cardClassList} style={cardStyle}>
+                        <c-b2b-search-product-card display-data={it.value} config={config}
+                            view-mode={config.data.displayMode} class={cardInnerClassList} page-name ={pageName}>
+                        </c-b2b-search-product-card>
+                    </div>
+                </template>
+            </div>
+            
+            
+        </div>
+    </template>
+</template>
+import { api, LightningElement } from 'lwc';
+
+/**
+ * A container for product cards
+ */
+export default class B2BSearchLayout extends LightningElement {
+    /**
+     * Gets or sets the display data for layout.
+     *
+     * @type {Product[]}
+     */
+    @api displayData;
+    showPackageList= false;
+    filteredList = [];
+
+    /**
+     * Gets or sets the layout configurations.
+     *
+     * @type {LayoutConfig}
+     */
+    @api config;
+    @api pageName;
+    get cardClassList() {
+        if (this.config.data.displayMode === 'Grid') {
+            return 'slds-col slds-small-size_1-of-1 slds-small-size_1-of-2 slds-large-size_1-of-3 slds-m-bottom_large';
+        } else if (this.config.data.displayMode === 'List') {
+            return 'layout-list';
+        } else {
+            return '';
+        }
+    }
+
+    get containerClassList() {
+        if (this.config.data.displayMode === 'Grid') {
+            return 'slds-grid slds-wrap slds-gutters';
+        } else if (this.config.data.displayMode === 'List') {
+            return 'layout-list-container';
+        } else {
+            return '';
+        }
+    }
+
+    get cardInnerClassList() {
+        if (this.config.data.displayMode === 'Grid') {
+            return 'layout-card';
+        } else if (this.config.data.displayMode === 'List') {
+            return 'layout-list';
+        } else {
+            return '';
+        }
+    }
+
+    get cardStyle() {
+        if (this.config.data.displayMode === 'Grid') {
+            return 'position: relative;';
+        } else if (this.config.data.displayMode === 'List') {
+            return '';
+        } else {
+            return '';
+        }
+    }
+
+    // get packageList() {
+    //     console.log('thisss',this.pageName);
+    //     return this.pageName === 'Package_Products__c';
+    // }
+
+    renderedCallback() {
+        console.log('SearchLayout', this.displayData);
+        if (this.config.data.displayMode === 'Grid') {
+            this.determineCardHeights();
+        }
+        if(this.pageName === 'Package_Products__c'){
+            this.showPackageList = true;
+        }
+        console.log('pageName in searchLayout',this.pageName);
+    }
+
+    determineCardHeights() {
+        const productCards = this.template.querySelectorAll(
+            'c-b2b-search-product-card'
+        );
+
+        let maxHeight = 0;
+        productCards.forEach((card) => {
+            if (card.offsetHeight > maxHeight) {
+                maxHeight = card.offsetHeight;
+            }
+        });
+
+        productCards.forEach((card) => (card.cardHeight = maxHeight));
+    }
+
+    handleFilteredResults(event) {
+        this.filteredList = event.detail;
+    }
+}
