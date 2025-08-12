@@ -1,0 +1,404 @@
+<template>
+    <div class="card-layout-list slds-grid slds-gutters slds-wrap slds-grid_vertical-stretch slds-var-p-top_small slds-var-p-bottom_small">
+        <div class="slds-col slds-size_1-of-2 slds-medium-size_1-of-3 slds-large-size_3-of-12 slds-text-align_left slds-p-right_none">
+            <div class="image-area slds-grid slds-align-center">
+                <!-- Checkbox on the left -->
+                <span class="slds-m-right_small slds-align_absolute-center cursor-pointer">
+                    <lightning-input 
+                        class="slds-p-top_medium" 
+                        type="checkbox" 
+                        checked={displayData.isChecked} 
+                        name="input1" 
+                        onclick={handleCheckbox}>
+                    </lightning-input>
+                </span>
+
+                <!-- Image on the right -->
+                <div lwc:if={showImage} onclick={notifyShowDetail}>
+                    <img src={image.url} class="slds-box slds-size_medium slds-p-around_none prodImg" alt={image.alternateText} />
+                </div>
+            </div>
+            
+        </div>
+
+        <div class="slds-col slds-size_1-of-2 slds-medium-size_1-of-3 slds-large-size_4-of-12 slds-p-left_none">
+            <c-b2b-search-data-fields display-data={displayData} package-part-quantity = {packagePartQuantity}  config={config}></c-b2b-search-data-fields>
+        </div>
+
+        <div class="slds-col slds-size_1-of-2 slds-medium-size_1-of-2 slds-large-size_5-of-12 slds-text-align_right">
+            <div class="price-area slds-grid slds-wrap">
+                <div class="slds-col data-label-text-medium slds-size_1-of-1 slds-medium-size_1-of-1 slds-align-top">
+                    <div class="slds-text-align_right slds-size_small slds-size_medium slds-size_large text-align-left-small auto-width">
+                        <span lwc:if={hasPrice}> 
+                            {config.labels.labelYourPrice} 
+                            <lightning-formatted-number 
+                                class="slds-p-left_x-small slds-text-heading_small"
+                                currency-code={currency} 
+                                format-style="currency" 
+                                value={price}>
+                            </lightning-formatted-number>
+                        </span>
+                        <div lwc:if={canShowListingPrice} class="slds-align-bottom">
+                            <span class="slds-assistive-text flex-right-or-left">
+                                {config.labels.labelOriginalPrice}
+                            </span>
+                            {config.labels.labelListPrice} 
+                            <lightning-formatted-number
+                                class="slds-p-left_x-small slds-text-body_regular flex-right-or-left" 
+                                value={listingPrice}
+                                currency-code={currency} 
+                                format-style="currency">
+                            </lightning-formatted-number>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-1 slds-align-bottom slds-p-top_xx-large">
+                    <div class="slds-text-align_right text-align-left-small">
+                        <template lwc:if={isVariantParent}>
+                            <button class="slds-button slds-button_brand" onclick={notifyShowDetail}>
+                                {config.labels.labelVariantButtonText}
+                            </button>
+                        </template>
+                        <template lwc:else>
+                            <div class="slds-show_medium" lwc:if={config.setting.compareCheckbox}>
+                                <lightning-input 
+                                    type="checkbox" 
+                                    label={config.labels.labelCompareCheckbox}
+                                    data-id={displayData.id} 
+                                    onchange={handleCompareCheckbox} 
+                                    checked={isCompareChecked}
+                                    disabled={isCompareDisabled} 
+                                    class="slds-var-m-bottom_small">
+                                </lightning-input>
+                            </div>
+
+                            <!-- Quantity Selector Component -->
+                            <c-b2b-quanity-selector
+                                product-id={displayData.id} 
+                                part-number={displayData.fields.StockKeepingUnit}
+                                product-description={displayData.fields.Description}
+                                quantity-rule={displayData.purchaseQuantityRule} 
+                                class="internal-action-area"
+                                config={config}
+                                package-part-quantity = {packagePartQuantity} 
+                                uom-message={uomMessage} 
+                                purchase-limit={purchaseLimit}
+                                display-replacement={displayReplacement}>
+                            </c-b2b-quanity-selector>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</template>
+// LWC APIs
+import { api, LightningElement, wire } from 'lwc';
+
+// Shop Solar specific js, modals, etc
+import cardError from './cardError.html';
+import cardGridView from './cardGridView.html';
+import cardListView from './cardListView.html';
+import packagesCardListView from './packagesCardListView.html';
+import { fireEvent, registerListener } from 'c/b2bPubSub';
+import { compareProducts } from 'c/b2bUtil';
+import { CurrentPageReference } from 'lightning/navigation';
+
+/**
+ * An organized display of a single product card.
+ *
+ * @fires SearchCard#calltoaction
+ * @fires SearchCard#showdetail
+ */
+export default class B2BProductSearchCard extends LightningElement {
+    /**
+     * Indicates if the compare checkbox is checked for this product
+     *
+     * @type {Boolean}
+     */
+    isCompareChecked;
+
+    /**
+     * Indicates if the compare checkbox should be disabled
+     *
+     * @type {Boolean}
+     */
+    isCompareDisabled;
+
+    /**
+     * Gets or sets the display data for card.
+     *
+     * @type {Product}
+     */
+    @api _displayData;
+
+    finalPartPurchaseLimit; //Ritaban
+    displayReplacement = false;//Ritaban: Newly Added
+
+    _cardHeight;
+    _insalecategory;
+
+    @api
+    set displayData(value) {
+        console.log('afterClick ', value);
+        this._displayData = value;
+        this.isCompareChecked = value.compareChecked;
+        this._insalecategory = this._displayData.productData.insalecategory;
+        this.finalPartPurchaseLimit = this._displayData.productData.finalPartPurchaseLimit;//Ritaban
+        this.packageQuantityLimit = this.displayData.productData.packagePartQuantity;
+        console.log('this.packageQuantityLimit@',this.packageQuantityLimit);
+        if (this.finalPartPurchaseLimit>0){
+            //console.log("Ritaban Purchasable PLP Yes");
+            this.displayReplacement=true;
+            //return true;
+        } else {
+            //console.log("Ritaban Purchasable PLP No");
+            this.displayReplacement=false;
+            //return false;
+            
+        }
+
+    }
+
+    get displayData() {
+        return this._displayData;
+    }
+
+    @api
+    set cardHeight(value) {
+        this._cardHeight = value;
+    }
+
+    get cardHeight() {
+        return this._cardHeight;
+    }
+
+    get cardStyle() {
+        if (!this.cardHeight) {
+            return '';
+        } else {
+            return 'height:' + this.cardHeight + 'px;';
+        }
+    }
+
+    /**
+     * Gets or sets the card layout configurations.
+     *
+     * @type {CardConfig}
+     */
+    @api config;
+    @api viewMode;
+    @api pageName;
+    @wire(CurrentPageReference)
+    pageRef;
+
+    render() {
+        if (this.viewMode === 'Grid' && this.pageName != 'Package_Products__c') {
+            console.log("Ritaban@@Grid");
+            return cardGridView;
+        } else if (this.viewMode === 'List' && this.pageName != 'Package_Products__c') {
+            console.log("Ritaban@@List");
+            return cardListView;
+        } else if(this.pageName === 'Package_Products__c'){
+            console.log('packagesCardListView in b2b search product card');
+            return packagesCardListView;
+        }else{
+            console.log("Ritaban@@Error");
+            return cardError;
+        }
+    }
+
+    connectedCallback() {
+        console.log("Ritaban@@CCB",this.pageName);
+        registerListener(
+            'compareTrayUpdated',
+            this.handleCompareTrayUpdated,
+            this
+        );
+        //console.log("Ritaban@@CCB2");
+        compareProducts.loadCompareProductsLocally();
+    }
+
+    /**
+     * Gets the product image.
+     *
+     * @type {Image}
+     * @readonly
+     */
+    get image() {
+        return this.displayData.image || {};
+    }
+
+    /**
+     * Whether or not the product image to be shown on card.
+     *
+     * @type {Boolean}
+     * @readonly
+     */
+    get showImage() {
+        return !!(this.config || {}).setting.showImage;
+    }
+
+    /**
+     * Gets the product price.
+     *
+     * @type {string}
+     * @readonly
+     */
+    get price() {
+        const prices = this.displayData.prices;
+        return prices.negotiatedPrice || prices.listingPrice;
+    }
+
+    /**
+     * Whether or not the product has price.
+     *
+     * @type {Boolean}
+     * @readonly
+     */
+    get hasPrice() {
+        return !!this.price;
+    }
+
+    /**
+     * Gets the original price for a product, before any discounts or entitlements are applied.
+     *
+     * @type {string}
+     */
+    get listingPrice() {
+        return this.displayData.prices.listingPrice;
+    }
+
+    /**
+     * Gets whether or not the listing price can be shown
+     * @returns {Boolean}
+     */
+    get canShowListingPrice() {
+        const prices = this.displayData.prices;
+
+        return (
+            prices.negotiatedPrice &&
+            prices.listingPrice &&
+            // don't show listing price if it's less than or equal to the negotiated price.
+            Number(prices.listingPrice) > Number(prices.negotiatedPrice)
+        );
+    }
+
+    /**
+     * Gets the currency for the price to be displayed.
+     *
+     * @type {string}
+     * @readonly
+     */
+    get currency() {
+        return this.displayData.prices.currencyIsoCode;
+    }
+
+    // /**
+    //  * Emits a notification that the user indicates a desire to view the details of a product.
+    //  *
+    //  * @fires SearchCard#showdetail
+    //  */
+    // notifyShowDetail(evt) {
+    //     evt.preventDefault();
+
+    //     this.dispatchEvent(
+    //         new CustomEvent('showdetail', {
+    //             bubbles: true,
+    //             composed: true,
+    //             detail: { productId: this.displayData.id },
+    //         })
+    //     );
+    // }
+
+    /**
+     * Check is the product class is Variation Parent or other type of parent
+     */
+    get isVariantParent() {
+        if (
+            this.displayData.productClass === 'VariationParent' ||
+            this.displayData.productClass === 'Set' ||
+            this.displayData.productClass === 'Bundle'
+        ) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    disableCompareCheckbox(data) {
+        if (data.selectedProductCount === data.maxProductCount) {
+            if (!this.isCompareChecked) {
+                this.isCompareDisabled = true;
+            }
+        } else {
+            this.isCompareDisabled = false;
+        }
+    }
+
+    /**
+     * Fire an event to indicate the compare checkbox has been checked or unchecked
+     */
+    handleCompareCheckbox(evt) {
+        evt.preventDefault();
+        this.isCompareChecked = evt.target.checked;
+        let obj = { checked: this.isCompareChecked, data: this.displayData };
+        fireEvent(this.pageRef, 'compareProductsChanged', obj);
+    }
+
+    handleCompareTrayUpdated(evt) {
+        const res = evt.selectedProducts.filter(
+            (product) => product.data.id === this.displayData.id
+        );
+        if (res.length == 0) {
+            this.isCompareChecked = false;
+        }
+        this.disableCompareCheckbox({
+            selectedProductCount: evt.selectedProducts.length,
+            maxProductCount: evt.maxProducts,
+        });
+    }
+
+    handleCompareProductsLoaded(evt) {
+        evt.selectedProducts.forEach((product) => {
+            if (product.data.id === this.displayData.id && product.checked) {
+                this.isCompareChecked = true;
+            }
+        });
+    }
+    
+    /**
+     * Gets the uomMessage for the quantity to be displayed..
+     *
+     * @type {string}
+     * @readonly
+     */
+    get uomMessage() {
+        return this.displayData && this.displayData.productData && this.displayData.productData.uomMessage ? this.displayData.productData.uomMessage :'';
+    }
+
+    // The purchaseLimit method gets the purchase limit of the product from the payload.
+    get purchaseLimit(){
+        return this.displayData && this.displayData.productData && this.displayData.productData.purchaseLimit? this.displayData.productData.purchaseLimit : 0;   
+    }
+    
+    get packagePartQuantity(){
+        console.log("quantityPackageLimit@@##",this.displayData.productData.packagePartQuantity );
+        return this.displayData && this.displayData.productData && this.displayData.productData.packagePartQuantity? this.displayData.productData.packagePartQuantity : 0;   
+    }
+
+    // get displayReplacementAvailability(){
+    //     if (this.finalPartPurchaseLimit>0){
+    //         console.log("Ritaban Purchasable PLP Yes");
+    //         this.displayReplacement=true;
+    //         return true;
+    //     } else {
+    //         console.log("Ritaban Purchasable PLP No");
+    //         this.displayReplacement=false;
+    //         return false;
+            
+    //     }
+    //     //display-replacement={displayReplacement}
+    // }
+}
