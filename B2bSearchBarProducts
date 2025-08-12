@@ -1,0 +1,117 @@
+<template>
+    <lightning-input
+        type="text"
+        label="Search Parts"
+        placeholder="Search by part name or part number..."
+        value={searchTerm}
+        onkeyup={handleSearch}>
+    </lightning-input>
+
+    <div class="slds-grid">
+        <!-- Select/Deselect All -->
+            <div class="slds-size_1-of-1 slds-medium-size_6-of-12 slds-large-size_6-of-12 slds-m-top_small">
+                <span> 
+                    <lightning-button
+                        variant="base"
+                        label="Select all"
+                        title="Select all"
+                        onclick={handleSelectAll}
+                        class="button-color slds-p-right_small data-text-medium">
+                    </lightning-button>
+                </span>
+                <span>
+                    <lightning-button
+                        variant="base"
+                        label="Deselect all"
+                        title="Deselect all"
+                        class="data-text-medium"
+                        onclick={handleDeselectAll}>
+                    </lightning-button>
+                </span>
+                <div class="slds-m-top_small">
+                    <strong>Total Selected:</strong> {totalSelected}
+                </div>
+            </div>
+
+       <!-- Action Buttons aligned to right on same line -->
+    <!-- <div class="slds-col slds-size_1-of-1 slds-m-top_small">
+        <div class="slds-grid slds-grid_align-end slds-gutters">
+            <lightning-button 
+                label="Add to list" 
+                variant="neutral"
+                class="slds-m-right_small">
+            </lightning-button>
+
+            <lightning-button
+                label={labels.labelAddToCart}
+                title={labels.labelAddToCart}
+                icon-name="utility:cart"
+                variant="brand"
+                class="custom-cart-button"
+                disabled={disableBulkOptions}
+                onclick={handleAddToCart}>
+            </lightning-button>
+        </div>
+      </div> -->
+    </div>
+</template>
+import { LightningElement,api, wire, track } from 'lwc';
+
+export default class B2bSearchBarProducts extends LightningElement {
+    @api allRecords = []; 
+    @track searchTerm = '';
+    @track totalSelected = 0;
+    @track filteredRecords = [];
+
+    connectedCallback() {
+        this.filteredRecords = [...this.allRecords];
+        this.totalSelected = 0;
+
+        // Send full list on load
+        this.dispatchFiltered();
+    }
+
+    handleSearch(event) {
+        this.searchTerm = event.target.value.toLowerCase();
+
+        // Filter by Description or SKU (case-insensitive)
+        this.filteredRecords = this.allRecords.filter(item => {
+            const desc = item.fields?.Description?.toLowerCase() || '';
+            const sku = item.fields?.StockKeepingUnit?.toLowerCase() 
+                     || item.productData?.sku?.toLowerCase() 
+                     || '';
+
+            return desc.includes(this.searchTerm) || sku.includes(this.searchTerm);
+        });
+
+        this.updateSelectedCount();
+        // Dispatch filtered list to parent
+        this.dispatchFiltered();
+    }
+
+    handleSelectAll() {
+        this.filteredRecords = this.filteredRecords.map(item => {
+            return { ...item, isChecked: true };
+        });
+        this.updateSelectedCount();
+        this.dispatchFiltered();
+    }
+
+    handleDeselectAll() {
+        this.filteredRecords = this.filteredRecords.map(item => {
+            return { ...item, isChecked: false };
+        });
+        this.updateSelectedCount();
+        this.dispatchFiltered();
+    }
+
+    updateSelectedCount() {
+        this.totalSelected = this.filteredRecords.filter(item => item.isChecked).length;
+    }
+
+    dispatchFiltered() {
+        this.dispatchEvent(
+            new CustomEvent('searchresults', { detail: this.filteredRecords })
+        );
+    }
+}
