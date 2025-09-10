@@ -1,0 +1,131 @@
+/**
+ * B2BAPI_POPDFSubmit Class
+ * 
+ * @Author  Andrew Day
+ * @Date    8/29/2025
+ * 
+ * @Description This class is responsible for handling the submission of Purchase Order PDFs
+ * via an external API. It includes methods for processing API callouts, generating
+ * XML requests for the PDF submission, and logging responses.
+ * 
+ * Main Methods:
+ * - processCallout: Initiates the callout process for the provided order ID.
+ * - callOut: Performs the actual API callout to submit the PDF.
+ * - generatePOPDFSubmitXMLReq: Constructs the XML request body for the PDF submission.
+ */
+public without sharing class B2BAPI_POPDFSubmit {
+
+    //Invoked from OrderTriggerFlow
+    @InvocableMethod
+    Public static void processCallout(List<String> orderSFID){  
+        String orderId= orderSFID[0];
+        callOut(orderId);
+    }
+
+    //Method to send PDF to LN
+    @future(callout=true)  
+    Public static void callOut(String orderId){   
+        
+        try{
+            String docXMLString= generatePOPDFSubmitXMLReq(orderId);
+            if(String.isNotBlank(docXMLString))
+            {
+                //Set up variables for LN Callout
+                AuthenticationAPI__mdt reqAPIEndpintURL=[select  Endpoint__c from AuthenticationAPI__mdt where DeveloperName='POPdfSubmitRequestAPI'];
+                String endpointUrl=reqAPIEndpintURL.Endpoint__c;
+                String requestMethod='POST';
+                String contentType='application/xml';
+                Map<String, String> reqHeader = new Map<String, String>();
+
+                //Auth Header Callout
+                reqHeader = B2BServiceLNCallout.getAuthAccessMap();
+
+                //Make callout to send PDF to LN and get response
+                HttpResponse resp = B2BServiceLNCallout.callHttpService(endpointUrl, requestMethod, contentType, docXMLString.trim(), reqHeader);
+
+                //Save outbound message
+                Map <String, String> outboundParams = new Map <String, String>();
+                String msgUUId = B2BMessageQueueUtils.saveOutboundMessage('PO PDF Submit', reqHeader, requestMethod, outboundParams, endpointUrl, Blob.valueOf(docXMLString), '');
+                           
+                Order ord = [SELECT Id, B2B_OrderNumber__c, B2B_Is_PDF_Sent__c FROM Order WHERE Id = :orderId LIMIT 1];
+
+                if(resp.getStatusCode()==200){
+                    //Callout was successful, update B2B_Is_PDF_Sent__c to true
+                    ord.B2B_Is_PDF_Sent__c=true;
+                    update ord;
+                }
+                else {
+                    //Callout failed, log error
+                    String responseBody=resp!=null && String.isNotBlank(resp.getBody())?(' RESPONSE_XML --> '+resp.getBody()+' STATUS: '+resp.getStatus()+' STATUS_CODE(): '+resp.getStatusCode()):(' STATUS: '+resp.getStatus()+' STATUS_CODE(): '+resp.getStatusCode()); 
+                    B2BLoggingUtil.error('B2B_PO_PDF_Submit_Error', 'B2BAPI_POPDFSubmit', 'callOut', 0, 'Error in B2BAPI_POPDFSubmit.callOut(), PDF submit was unsuccessful', responseBody);
+                    B2BLoggingUtil.flush();
+                }
+
+                //Save response from callout + link to Order
+                B2BMessageQueueUtils.saveRestResponseForOutboundMessage(msgUUID, resp.getStatusCode(), resp.getBody());
+                B2BMessageQueueUtils.RelatedRecords messageRecords = new B2BMessageQueueUtils.RelatedRecords(msgUUID);
+                messageRecords.add(ord.Id);
+                messageRecords.save();
+            }
+        }
+        catch(Exception e)
+        {
+            B2BLoggingUtil.error('B2B_PO_PDF_Submit_Error', 'B2BAPI_POPDFSubmit', 'callOut', 0, 'Exception in B2BAPI_POPDFSubmit.callOut(): ' + e.getMessage(), e);
+            B2BLoggingUtil.flush();
+        }
+    }
+
+    Public static string generatePOPDFSubmitXMLReq(String orderId){ 
+        DOM.Document doc = new DOM.Document(); 
+        try{
+            Order ord = [SELECT Id, PoNumber, B2B_OrderNumber__c FROM Order WHERE id=:orderId limit 1];
+            String poNumber = ord.PoNumber;
+            set<id> attachIds = new set<id>();
+            
+            //Get PDFs attached to order
+            List<ContentDocumentLink> pdfAttachmentList=[select id,ContentDocument.title,LinkedEntityId ,ContentDocumentID,ContentDocument.Filetype,ContentDocument.description from ContentDocumentLink  where LinkedEntityId=:orderId];
+           
+            //make sure there is a PDF and the order number is populated
+            if(pdfAttachmentList.size()>0 && String.isNotBlank(ord.B2B_OrderNumber__c)) {
+                for(ContentDocumentLink pdfAttachList:pdfAttachmentList){
+                    attachIds.add(pdfAttachList.ContentDocumentID);
+                }                
+                List<ContentVersion> pdfContentList = [select id,title,versiondata from ContentVersion where ContentDocumentId IN :attachIds];
+
+                //Generate XML for each content version
+                for(ContentVersion pdfAttachment:pdfContentList)
+                {
+                    String soapNS = 'http://infor.com/daf';
+                    dom.XmlNode envelope=doc.createRootElement('item',soapNS,'');
+                    dom.XmlNode attrs = envelope.addChildElement('attrs', null, null);
+                    dom.XmlNode attr = attrs.addChildElement('attr', null, null);
+                    attr.addChildElement('name', null, null).addTextNode('MDS_id1');
+                    attr.addChildElement('value', null, null).addTextNode(ord.B2B_OrderNumber__c);
+                    dom.XmlNode resrs = envelope.addChildElement('resrs', null, null);
+                    dom.XmlNode res = resrs.addChildElement('res', null, null);                
+                    res.addChildElement('filename', null, null).addTextNode(pdfAttachment.title);
+                    Blob pdfBlob=pdfAttachment.versiondata;
+                    String encryptedBody  = EncodingUtil.base64Encode(pdfBlob);
+                    res.addChildElement('base64', null, null).addTextNode(encryptedBody.unescapeHtml4());
+                    dom.XmlNode acl = envelope.addChildElement('acl', null, null);
+                    acl.addChildElement('name', null, null).addTextNode('All Read / Owner Edit');
+                    envelope.addChildElement('entityName', null, null).addTextNode('MDS_Customer_PO');
+                }
+                return (doc.toXMLString());
+
+            } else {
+                B2BLoggingUtil.error('B2B_PO_PDF_Submit_Error', 'B2BAPI_POPDFSubmit', 'generatePOPDFSubmitXMLReq', 0, 'Either attachment doesnt exist or the orderId is empty: ' + orderId, ord);
+                B2BLoggingUtil.flush();
+                return '';
+            }
+        }
+        catch(Exception e)
+        {
+            System.debug('Exception caught :'+e.getMessage());
+            String exceptionDetail = e.getMessage() + ' Line Number: ' + e.getLineNumber() + ' Stack Trace: ' + e.getStackTraceString() + ' Order SFID: ' + orderId;
+            B2BLoggingUtil.error('B2B_PO_PDF_Submit_Error', 'B2BAPI_POPDFSubmit', 'generatePOPDFSubmitXMLReq', 0, exceptionDetail, e);
+            B2BLoggingUtil.flush();
+            return ''; 
+        }
+    }
+}
