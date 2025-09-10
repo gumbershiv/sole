@@ -1,0 +1,144 @@
+@isTest
+private class B2BAPI_POPDFSubmit_Test {
+
+    @testSetup
+    static void setupData() {
+        // Create a test user
+        Profile p = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+        User u = new User(
+            FirstName = 'Test',
+            LastName = 'User',
+            Email = 'testuser@test.com',
+            Username = 'testuser' + System.currentTimeMillis() + '@test.com',
+            Alias = 'tuser',
+            TimeZoneSidKey = 'Asia/Kolkata',
+            LocaleSidKey = 'en_US',
+            EmailEncodingKey = 'UTF-8',
+            LanguageLocaleKey = 'en_US',
+            ProfileId = p.Id
+        );
+        insert u;
+
+        // Create an Order
+        Order ord = new Order(
+            AccountId = [SELECT Id FROM Account LIMIT 1].Id,
+            Status = 'Draft',
+            EffectiveDate = Date.today(),
+            PoNumber = 'PO123',
+            B2B_OrderNumber__c = 'ORD123',
+            B2B_Is_PDF_Sent__c = false
+        );
+        insert ord;
+
+        // Create a PDF ContentDocument
+        ContentVersion cv = new ContentVersion(
+            Title = 'TestPO',
+            PathOnClient = 'TestPO.pdf',
+            VersionData = Blob.valueOf('Sample PDF Data'),
+            IsMajorVersion = true
+        );
+        insert cv;
+
+        ContentDocument cd = [
+            SELECT Id, LatestPublishedVersionId FROM ContentDocument
+            WHERE LatestPublishedVersionId = :cv.Id LIMIT 1
+        ];
+
+        ContentDocumentLink cdl = new ContentDocumentLink(
+            LinkedEntityId = ord.Id,
+            ContentDocumentId = cd.Id,
+            ShareType = 'V'
+        );
+        insert cdl;
+
+        // Insert Custom Metadata record (stub for endpoint)
+        AuthenticationAPI__mdt meta = new AuthenticationAPI__mdt(
+            DeveloperName = 'POPdfSubmitRequestAPI',
+            MasterLabel = 'POPdfSubmitRequestAPI',
+            Endpoint__c = 'https://mock.endpoint.com'
+        );
+        insert meta;
+    }
+
+    @isTest
+    static void testPOPdfSubmit_Success() {
+        Test.startTest();
+        User u = [SELECT Id FROM User WHERE Username LIKE 'testuser%@test.com' LIMIT 1];
+        System.runAs(u) {
+            Test.setMock(HttpCalloutMock.class, new MockHttpResponseGenerator(200, 'Success Response'));
+
+            Order ord = [SELECT Id FROM Order LIMIT 1];
+            B2BAPI_POPDFSubmit.processCallout(new List<String>{ord.Id});
+            Test.stopTest();
+
+            Order updatedOrd = [SELECT B2B_Is_PDF_Sent__c FROM Order WHERE Id = :ord.Id];
+            System.assertEquals(true, updatedOrd.B2B_Is_PDF_Sent__c, 'Order should be marked as PDF sent');
+        }
+    }
+
+    @isTest
+    static void testPOPdfSubmit_Failure_500() {
+        Test.startTest();
+        User u = [SELECT Id FROM User WHERE Username LIKE 'testuser%@test.com' LIMIT 1];
+        System.runAs(u) {
+            Test.setMock(HttpCalloutMock.class, new MockHttpResponseGenerator(500, 'Internal Error'));
+
+            Order ord = [SELECT Id FROM Order LIMIT 1];
+            B2BAPI_POPDFSubmit.processCallout(new List<String>{ord.Id});
+            Test.stopTest();
+
+            Order updatedOrd = [SELECT B2B_Is_PDF_Sent__c FROM Order WHERE Id = :ord.Id];
+            System.assertEquals(false, updatedOrd.B2B_Is_PDF_Sent__c, 'Order should remain unsent on 500 error');
+        }
+    }
+
+    @isTest
+    static void testPOPdfSubmit_Non200_400() {
+        Test.startTest();
+        User u = [SELECT Id FROM User WHERE Username LIKE 'testuser%@test.com' LIMIT 1];
+        System.runAs(u) {
+            Test.setMock(HttpCalloutMock.class, new MockHttpResponseGenerator(400, 'Bad Request'));
+
+            Order ord = [SELECT Id FROM Order LIMIT 1];
+            B2BAPI_POPDFSubmit.processCallout(new List<String>{ord.Id});
+            Test.stopTest();
+
+            Order updatedOrd = [SELECT B2B_Is_PDF_Sent__c FROM Order WHERE Id = :ord.Id];
+            System.assertEquals(false, updatedOrd.B2B_Is_PDF_Sent__c, 'Order should remain unsent on 400 error');
+        }
+    }
+
+    @isTest
+    static void testGenerateXml_NoAttachment() {
+        Order ord2 = new Order(
+            AccountId = [SELECT Id FROM Account LIMIT 1].Id,
+            Status = 'Draft',
+            EffectiveDate = Date.today(),
+            PoNumber = 'PO999',
+            B2B_OrderNumber__c = 'ORD999'
+        );
+        insert ord2;
+
+        Test.startTest();
+        String xmlReq = B2BAPI_POPDFSubmit.generatePOPDFSubmitXMLReq(ord2.Id);
+        Test.stopTest();
+
+        System.assertEquals('', xmlReq, 'Should return empty string if no PDF attached');
+    }
+
+    // Mock class for HttpCalloutMock
+    private class MockHttpResponseGenerator implements HttpCalloutMock {
+        Integer statusCode;
+        String body;
+        MockHttpResponseGenerator(Integer sc, String b) {
+            statusCode = sc;
+            body = b;
+        }
+        public HTTPResponse respond(HTTPRequest req) {
+            HttpResponse res = new HttpResponse();
+            res.setStatusCode(statusCode);
+            res.setBody(body);
+            return res;
+        }
+    }
+}
