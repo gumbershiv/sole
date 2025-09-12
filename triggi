@@ -1,0 +1,73 @@
+trigger ProductCollectionTrigger on Product_Collection__c (after insert, after update) {
+    if (Trigger.isAfter) {
+        if (Trigger.isInsert || Trigger.isUpdate) {
+            ProductCollectionHandler.updateCollectionItemPrices(Trigger.new, Trigger.oldMap);
+        }
+    }
+}
+
+
+
+
+public class ProductCollectionHandler {
+    public static void updateCollectionItemPrices(List<Product_Collection__c> newList, Map<Id, Product_Collection__c> oldMap) {
+        Set<Id> collectionIdsToUpdate = new Set<Id>();
+        Map<Id, Id> collectionToAccount = new Map<Id, Id>();
+
+        for (Product_Collection__c pc : newList) {
+            Id oldAccountId = oldMap != null && oldMap.containsKey(pc.Id) ? oldMap.get(pc.Id).Account__c : null;
+
+            // Run only if account is newly set, changed, or cleared
+            if (pc.Account__c != oldAccountId) {
+                collectionIdsToUpdate.add(pc.Id);
+                collectionToAccount.put(pc.Id, pc.Account__c);
+            }
+        }
+
+        if (collectionIdsToUpdate.isEmpty()) return;
+
+        // Fetch related collection items
+        List<Product_Collection_Item__c> items = [
+            SELECT Id, Product__c, Price__c, Product_Collection__c
+            FROM Product_Collection_Item__c
+            WHERE Product_Collection__c IN :collectionIdsToUpdate
+        ];
+
+        // Fetch prices for products based on account (replace with your pricing logic)
+        Map<Id, Decimal> productToPriceMap = new Map<Id, Decimal>();
+        Set<Id> productIds = new Set<Id>();
+        for (Product_Collection_Item__c item : items) {
+            productIds.add(item.Product__c);
+        }
+
+        // Example: assume PricebookEntry links Account & Product
+        List<PricebookEntry> pbes = [
+            SELECT Product2Id, UnitPrice
+            FROM PricebookEntry
+            WHERE Product2Id IN :productIds
+            AND Pricebook2.IsStandard = true
+        ];
+        for (PricebookEntry pbe : pbes) {
+            productToPriceMap.put(pbe.Product2Id, pbe.UnitPrice);
+        }
+
+        // Update collection items
+        for (Product_Collection_Item__c item : items) {
+            Id accId = collectionToAccount.get(item.Product_Collection__c);
+
+            if (accId == null) {
+                // Account cleared → remove price
+                item.Price__c = null;
+            } else {
+                // Set price if available
+                if (productToPriceMap.containsKey(item.Product__c)) {
+                    item.Price__c = productToPriceMap.get(item.Product__c);
+                }
+            }
+        }
+
+        if (!items.isEmpty()) {
+            update items;
+        }
+    }
+}
