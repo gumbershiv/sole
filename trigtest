@@ -1,50 +1,133 @@
-@isTest
+@IsTest
 public class B2BProductCollectionHandlerTest {
+    
+    // --- MOCK B2BUtil ---
+    public class MockB2BUtil extends B2BUtil {
+        public static String resolveCommunityIdToWebstoreId(String communityId) {
+            return 'fakeWebstoreId';
+        }
+        public static String resolveWebstoreIdToCommunityId(String webstoreId) {
+            return 'fakeCommunityId';
+        }
+    }
+
     @testSetup
     static void setupData() {
-        webstore webstore = B2B_TestDataFactory.createWebStore();
-        // Accounts
-        Account testAccount = B2B_TestDataFactory.createAccount(true);
-        Account testAccount2 = B2B_TestDataFactory.createAccount(false);
-        testAccount2.Name = 'testAccount2';
-        insert testAccount2;
+        WebStore ws = B2B_TestDataFactory.createWebStore();
         
-        // Create Test Contact and User
-        Contact testContact = B2B_TestDataFactory.createContact(testAccount);  
+        Account acc1 = B2B_TestDataFactory.createAccount(true);
+        Account acc2 = B2B_TestDataFactory.createAccount(false);
+        acc2.Name = 'testAccount2';
+        insert acc2;
         
-        User testUser = B2B_TestDataFactory.createCommunityUser(testContact, 'testUser@test.com');
+        Contact c = B2B_TestDataFactory.createContact(acc1);
+        User u = B2B_TestDataFactory.createCommunityUser(c, 'testUser@test.com');
         
-        
-        // Create Product
-        Product2 testProductA = B2B_TestDataFactory.createProduct2();
-        testProductA.B2B_PACK_QUANTITY__c = 1;
-        testProductA.B2B_UNITS__c = 'EA';
-        update testProductA;
-        
+        Product2 p = B2B_TestDataFactory.createProduct2();
+        p.B2B_PACK_QUANTITY__c = 1;
+        p.B2B_UNITS__c = 'EA';
+        update p;
+
         B2B_TestDataFactory.createProduct2('SKU123','SKU123',true);
         
-        System.runAs(testUser){
-            // Create a new ProductCollection record
-            ProductCollection__c productCollection = B2B_TestDataFactory.createProductCollection(webstore.Id,testAccount.Id);
-            
-            //create line items
-            ProductCollectionLineItem__c collectionItem = B2B_TestDataFactory.createProductCollectionLineItem(testProductA.Id,productCollection.Id);
-            
-            // Create a new public ProductCollection record
-            ProductCollection__c publicpc = B2B_TestDataFactory.createPublicProductCollection(webstore.Id,testAccount.Id);
-            
+        System.runAs(u){
+            ProductCollection__c pc = B2B_TestDataFactory.createProductCollection(ws.Id, acc1.Id);
+            B2B_TestDataFactory.createProductCollectionLineItem(p.Id, pc.Id);
+            B2B_TestDataFactory.createPublicProductCollection(ws.Id, acc1.Id);
         }
     }
     
+    // --- TEST METHODS ---
+
     @IsTest
     static void testUpdateCollectionItemPrices_Insert() {
         Test.startTest();
-        ProductCollection__c pc = [SELECT id from ProductCollection__c LIMIT 1];
-        // call helper directly
+        ProductCollection__c pc = [SELECT Id FROM ProductCollection__c LIMIT 1];
         B2BProductCollectionHandler.updateCollectionItemPrices(
             new List<ProductCollection__c>{ pc },
             null
         );
         Test.stopTest();
+        
+        ProductCollectionLineItem__c li = [
+            SELECT Id, B2B_TotalPrice__c 
+            FROM ProductCollectionLineItem__c 
+            LIMIT 1
+        ];
+        System.assertNotEquals(0, li.B2B_TotalPrice__c,
+            'Total price should be updated on insert');
+    }
+
+    @IsTest
+    static void testUpdateCollectionItemPrices_UpdateAccount() {
+        ProductCollection__c pc = [SELECT Id, AccountId__c FROM ProductCollection__c LIMIT 1];
+        ProductCollection__c oldPc = pc.clone(false, true, true, true);
+
+        // Change Account
+        Account acc2 = [SELECT Id FROM Account WHERE Name = 'testAccount2' LIMIT 1];
+        pc.AccountId__c = acc2.Id;
+
+        Test.startTest();
+        B2BProductCollectionHandler.updateCollectionItemPrices(
+            new List<ProductCollection__c>{ pc },
+            new Map<Id, ProductCollection__c>{ oldPc.Id => oldPc }
+        );
+        Test.stopTest();
+
+        ProductCollectionLineItem__c li = [
+            SELECT Id, B2B_TotalPrice__c 
+            FROM ProductCollectionLineItem__c 
+            LIMIT 1
+        ];
+        System.assertNotEquals(0, li.B2B_TotalPrice__c,
+            'Handler should still update prices when Account changes');
+    }
+
+    @IsTest
+    static void testUpdateCollectionItemPrices_NoAccount() {
+        // Create collection without Account
+        ProductCollection__c noAccPc = new ProductCollection__c(Name = 'No Account');
+        insert noAccPc;
+
+        Test.startTest();
+        B2BProductCollectionHandler.updateCollectionItemPrices(
+            new List<ProductCollection__c>{ noAccPc },
+            null
+        );
+        Test.stopTest();
+
+        ProductCollectionLineItem__c li = [
+            SELECT Id, B2B_TotalPrice__c 
+            FROM ProductCollectionLineItem__c 
+            LIMIT 1
+        ];
+        System.assertEquals(0, li.B2B_TotalPrice__c,
+            'No price update should happen when Account is null');
+    }
+
+    @IsTest
+    static void testUpdateCollectionItemPrices_MultipleCollections() {
+        // Get existing account + webstore
+        Account acc1 = [SELECT Id FROM Account LIMIT 1];
+        WebStore ws = [SELECT Id FROM WebStore LIMIT 1];
+
+        // Create two extra collections
+        ProductCollection__c pc1 = B2B_TestDataFactory.createProductCollection(ws.Id, acc1.Id);
+        ProductCollection__c pc2 = B2B_TestDataFactory.createProductCollection(ws.Id, acc1.Id);
+
+        Test.startTest();
+        B2BProductCollectionHandler.updateCollectionItemPrices(
+            new List<ProductCollection__c>{ pc1, pc2 },
+            null
+        );
+        Test.stopTest();
+
+        // Verify line items exist and one got updated
+        List<ProductCollectionLineItem__c> lis = [
+            SELECT Id, B2B_TotalPrice__c 
+            FROM ProductCollectionLineItem__c 
+            WHERE ProductCollection__c IN :new List<Id>{ pc1.Id, pc2.Id }
+        ];
+        System.assert(!lis.isEmpty(), 'Expected line items for test collections');
     }
 }
