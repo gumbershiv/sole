@@ -1,0 +1,134 @@
+trigger ProductCollectionTrigger on ProductCollection__c (after insert, after update) {
+    if (Trigger.isAfter) {
+        B2BProductCollectionHandler.updateCollectionItemPrices(Trigger.new, Trigger.oldMap);
+    }
+}
+
+public class B2BProductCollectionHandler {
+
+    public static void updateCollectionItemPrices(List<ProductCollection__c> newList, Map<Id, ProductCollection__c> oldMap) {
+        if (newList == null || newList.isEmpty()) return;
+
+        Set<Id> collectionIdsToUpdate = new Set<Id>();
+        Map<Id, Id> collectionToAccount = new Map<Id, Id>();
+        Map<Id, String> collectionToStore = new Map<Id, String>();
+
+        // Step 1: Determine which collections need price update
+        /*for (ProductCollection__c pc : newList) {
+            Id oldAccountId = (oldMap != null && oldMap.containsKey(pc.Id)) 
+                              ? oldMap.get(pc.Id).AccountId__c 
+                              : null;
+
+            // Insert → oldAccountId is null → only check AccountId__c is present
+            // Update → check if AccountId__c changed
+            if (pc.AccountId__c != null && pc.AccountId__c != oldAccountId) {
+                collectionIdsToUpdate.add(pc.Id);
+                collectionToAccount.put(pc.Id, pc.AccountId__c);
+            }
+        }*/
+        for (ProductCollection__c pc : newList) {
+            Id oldAccountId = (oldMap != null && oldMap.containsKey(pc.Id)) 
+                ? oldMap.get(pc.Id).AccountId__c 
+                : null;
+            
+            Boolean isNewRecordWithAccount = (oldMap == null || !oldMap.containsKey(pc.Id)) && pc.AccountId__c != null;
+            Boolean isUpdatedRecordWithChange = (oldMap != null && oldMap.containsKey(pc.Id)) 
+                && (pc.AccountId__c != null && pc.AccountId__c != oldAccountId);
+            
+            if (isNewRecordWithAccount || isUpdatedRecordWithChange) {
+                collectionIdsToUpdate.add(pc.Id);
+                collectionToAccount.put(pc.Id, pc.AccountId__c);
+            }
+        }
+
+
+        if (collectionIdsToUpdate.isEmpty()) {
+            System.debug('No collections with new or changed AccountId → skipping price update');
+            return;
+        }
+
+        // Step 2: Fetch Store__c for these collections
+        Map<Id, ProductCollection__c> collectionsWithStore = new Map<Id, ProductCollection__c>(
+            [SELECT Id, AccountId__c, Store__c 
+             FROM ProductCollection__c 
+             WHERE Id IN :collectionIdsToUpdate]
+        );
+
+        for (ProductCollection__c pc : collectionsWithStore.values()) {
+            if (pc.Store__c != null) {
+                collectionToStore.put(pc.Id, pc.Store__c);
+            }
+        }
+
+        // Step 3: Fetch collection items via controller
+        List<B2BProductCollectionController.productCollectionItems> allListData = new List<B2BProductCollectionController.productCollectionItems>();
+
+        for (Id collectionId : collectionToAccount.keySet()) {
+            String effAccountId = String.valueOf(collectionToAccount.get(collectionId));
+            String webstoreId = collectionToStore.get(collectionId);
+            String communityId = null;
+
+            if (String.isNotBlank(webstoreId)) {
+                communityId = B2BUtil.resolveWebstoreIdToCommunityId(webstoreId);
+            }
+
+            System.debug('Processing collectionId=' + collectionId 
+                        + ', effAccountId=' + effAccountId 
+                        + ', webstoreId=' + webstoreId 
+                        + ', communityId=' + communityId);
+
+            if (String.isNotBlank(effAccountId) && String.isNotBlank(communityId)) {
+                B2BActionResponse resp = B2BProductCollectionController.getListItemsData(
+                    communityId,
+                    effAccountId,
+                    String.valueOf(collectionId),
+                    null
+                );
+                if (resp != null && resp.data != null) {
+                    allListData.add((B2BProductCollectionController.productCollectionItems) resp.data);
+                }
+            }
+        }
+
+        System.debug('allListData size=' + allListData.size());
+
+        // Step 4: Update line items
+        List<ProductCollectionLineItem__c> itemsToUpdate = new List<ProductCollectionLineItem__c>();
+
+        for (B2BProductCollectionController.productCollectionItems pci : allListData) {
+            if (pci.firstSetRecords != null) {
+                processRecords(pci.firstSetRecords, itemsToUpdate);
+            }
+            if (pci.secondSetRecords != null) {
+                processRecords(pci.secondSetRecords, itemsToUpdate);
+            }
+        }
+
+        if (!itemsToUpdate.isEmpty()) {
+            update itemsToUpdate;
+            System.debug('Updated Line Items: ' + itemsToUpdate.size());
+        } else {
+            System.debug('No line items to update');
+        }
+    }
+
+    private static void processRecords(
+        List<B2BProductCollectionController.listItemsData> recordSet, 
+        List<ProductCollectionLineItem__c> itemsToUpdate
+    ) {
+        for (B2BProductCollectionController.listItemsData rec : recordSet) {
+            Decimal unitPrice = (rec.productData != null && rec.productData.unitprice != null) 
+                ? rec.productData.unitprice 
+                : 0;
+            Decimal qty = (rec.itemQuantity != null) ? rec.itemQuantity : 0;
+            Decimal totalPrice = unitPrice * qty;
+
+            if (rec.lineItemId != null) {
+                itemsToUpdate.add(new ProductCollectionLineItem__c(
+                    Id = rec.lineItemId,
+                    B2B_TotalPrice__c = totalPrice
+                ));
+            }
+        }
+    }
+}
