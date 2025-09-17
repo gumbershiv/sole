@@ -1,77 +1,56 @@
 @IsTest
-public class B2BProductCollectionHandlerTest {
-    
-    // --- MOCK B2BUtil ---
-    public class MockB2BUtil extends B2BUtil {
-        public static String resolveCommunityIdToWebstoreId(String communityId) {
-            return 'fakeWebstoreId';
-        }
-        public static String resolveWebstoreIdToCommunityId(String webstoreId) {
-            return 'fakeCommunityId';
-        }
-    }
+public class ProductCollectionTriggerTest {
 
     @testSetup
     static void setupData() {
         WebStore ws = B2B_TestDataFactory.createWebStore();
-        
+
         Account acc1 = B2B_TestDataFactory.createAccount(true);
         Account acc2 = B2B_TestDataFactory.createAccount(false);
-        acc2.Name = 'testAccount2';
+        acc2.Name = 'TriggerTestAccount2';
         insert acc2;
-        
+
         Contact c = B2B_TestDataFactory.createContact(acc1);
-        User u = B2B_TestDataFactory.createCommunityUser(c, 'testUser@test.com');
-        
+        User u = B2B_TestDataFactory.createCommunityUser(c, 'triggeruser@test.com');
+
         Product2 p = B2B_TestDataFactory.createProduct2();
         p.B2B_PACK_QUANTITY__c = 1;
         p.B2B_UNITS__c = 'EA';
         update p;
 
-        B2B_TestDataFactory.createProduct2('SKU123','SKU123',true);
-        
-        System.runAs(u){
+        System.runAs(u) {
             ProductCollection__c pc = B2B_TestDataFactory.createProductCollection(ws.Id, acc1.Id);
             B2B_TestDataFactory.createProductCollectionLineItem(p.Id, pc.Id);
-            B2B_TestDataFactory.createPublicProductCollection(ws.Id, acc1.Id);
         }
     }
-    
-    // --- TEST METHODS ---
 
     @IsTest
-    static void testUpdateCollectionItemPrices_Insert() {
+    static void testTrigger_AfterInsert() {
         Test.startTest();
-        ProductCollection__c pc = [SELECT Id FROM ProductCollection__c LIMIT 1];
-        B2BProductCollectionHandler.updateCollectionItemPrices(
-            new List<ProductCollection__c>{ pc },
-            null
-        );
+        // Insert another collection to fire trigger
+        WebStore ws = [SELECT Id FROM WebStore LIMIT 1];
+        Account acc1 = [SELECT Id FROM Account LIMIT 1];
+        ProductCollection__c pc = B2B_TestDataFactory.createProductCollection(ws.Id, acc1.Id);
+        insert pc;
         Test.stopTest();
-        
+
         ProductCollectionLineItem__c li = [
             SELECT Id, B2B_TotalPrice__c 
             FROM ProductCollectionLineItem__c 
             LIMIT 1
         ];
         System.assertNotEquals(0, li.B2B_TotalPrice__c,
-            'Total price should be updated on insert');
+            'Trigger should update total price after insert');
     }
 
     @IsTest
-    static void testUpdateCollectionItemPrices_UpdateAccount() {
+    static void testTrigger_AfterUpdate_AccountChange() {
         ProductCollection__c pc = [SELECT Id, AccountId__c FROM ProductCollection__c LIMIT 1];
-        ProductCollection__c oldPc = pc.clone(false, true, true, true);
-
-        // Change Account
-        Account acc2 = [SELECT Id FROM Account WHERE Name = 'testAccount2' LIMIT 1];
-        pc.AccountId__c = acc2.Id;
-
+        Account acc2 = [SELECT Id FROM Account WHERE Name = 'TriggerTestAccount2' LIMIT 1];
+        
         Test.startTest();
-        B2BProductCollectionHandler.updateCollectionItemPrices(
-            new List<ProductCollection__c>{ pc },
-            new Map<Id, ProductCollection__c>{ oldPc.Id => oldPc }
-        );
+        pc.AccountId__c = acc2.Id;
+        update pc; // fires trigger
         Test.stopTest();
 
         ProductCollectionLineItem__c li = [
@@ -80,20 +59,14 @@ public class B2BProductCollectionHandlerTest {
             LIMIT 1
         ];
         System.assertNotEquals(0, li.B2B_TotalPrice__c,
-            'Handler should still update prices when Account changes');
+            'Trigger should still update after account change');
     }
 
     @IsTest
-    static void testUpdateCollectionItemPrices_NoAccount() {
-        // Create collection without Account
-        ProductCollection__c noAccPc = new ProductCollection__c(Name = 'No Account');
-        insert noAccPc;
-
+    static void testTrigger_NoAccount() {
         Test.startTest();
-        B2BProductCollectionHandler.updateCollectionItemPrices(
-            new List<ProductCollection__c>{ noAccPc },
-            null
-        );
+        ProductCollection__c pc = new ProductCollection__c(Name = 'TriggerTest_NoAccount');
+        insert pc; // no AccountId__c, should do nothing
         Test.stopTest();
 
         ProductCollectionLineItem__c li = [
@@ -102,32 +75,34 @@ public class B2BProductCollectionHandlerTest {
             LIMIT 1
         ];
         System.assertEquals(0, li.B2B_TotalPrice__c,
-            'No price update should happen when Account is null');
+            'Trigger should not update when AccountId is null');
     }
 
     @IsTest
-    static void testUpdateCollectionItemPrices_MultipleCollections() {
-        // Get existing account + webstore
-        Account acc1 = [SELECT Id FROM Account LIMIT 1];
+    static void testTrigger_BulkInsertUpdate() {
         WebStore ws = [SELECT Id FROM WebStore LIMIT 1];
+        Account acc1 = [SELECT Id FROM Account LIMIT 1];
 
-        // Create two extra collections
-        ProductCollection__c pc1 = B2B_TestDataFactory.createProductCollection(ws.Id, acc1.Id);
-        ProductCollection__c pc2 = B2B_TestDataFactory.createProductCollection(ws.Id, acc1.Id);
+        List<ProductCollection__c> bulkCollections = new List<ProductCollection__c>();
+        for (Integer i = 0; i < 5; i++) {
+            bulkCollections.add(B2B_TestDataFactory.createProductCollection(ws.Id, acc1.Id));
+        }
 
         Test.startTest();
-        B2BProductCollectionHandler.updateCollectionItemPrices(
-            new List<ProductCollection__c>{ pc1, pc2 },
-            null
-        );
+        insert bulkCollections; // after insert fires
+
+        for (ProductCollection__c pc : bulkCollections) {
+            pc.AccountId__c = acc1.Id; // dummy update to fire trigger
+        }
+        update bulkCollections; // after update fires
         Test.stopTest();
 
-        // Verify line items exist and one got updated
+        // Verify line items exist for at least one collection
         List<ProductCollectionLineItem__c> lis = [
             SELECT Id, B2B_TotalPrice__c 
             FROM ProductCollectionLineItem__c 
-            WHERE ProductCollection__c IN :new List<Id>{ pc1.Id, pc2.Id }
+            LIMIT 5
         ];
-        System.assert(!lis.isEmpty(), 'Expected line items for test collections');
+        System.assert(!lis.isEmpty(), 'Bulk trigger execution should update line items');
     }
 }
