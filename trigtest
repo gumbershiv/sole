@@ -1,0 +1,121 @@
+@IsTest
+public class ProductCollectionTriggerTest {
+    
+    // --- MOCK Dependencies ---
+    public class MockB2BUtil extends B2BUtil {
+        public static String resolveWebstoreIdToCommunityId(String webstoreId) {
+            return 'fakeCommunityId';
+        }
+    }
+    
+    public class MockB2BProductCollectionController extends B2BProductCollectionController {
+        @IsTest
+        public static B2BActionResponse getListItemsData(
+            String communityId,
+            String effAccountId,
+            String collectionId,
+            String dummy
+        ) {
+            // Create mock product data
+            listItemsData item = new listItemsData();
+            item.lineItemId = TestDataFactory.lineItemId; // reference to pre-inserted line item
+            item.itemQuantity = 2;
+            item.productData = new productData();
+            item.productData.unitprice = 100;
+            
+            productCollectionItems pci = new productCollectionItems();
+            pci.firstSetRecords = new List<listItemsData>{ item };
+            
+            B2BActionResponse resp = new B2BActionResponse();
+            resp.data = pci;
+            return resp;
+        }
+    }
+    
+    // --- Shared Test Data Factory ---
+    public class TestDataFactory {
+        public static Id account1Id;
+        public static Id account2Id;
+        public static Id lineItemId;
+        
+        @testSetup
+        static void setupData() {
+            // Accounts
+            Account acc1 = new Account(Name = 'Account 1');
+            insert acc1;
+            account1Id = acc1.Id;
+            
+            Account acc2 = new Account(Name = 'Account 2');
+            insert acc2;
+            account2Id = acc2.Id;
+            
+            // One line item to be updated
+            ProductCollectionLineItem__c li = new ProductCollectionLineItem__c(
+                Name = 'Test Line Item',
+                B2B_TotalPrice__c = 0
+            );
+            insert li;
+            lineItemId = li.Id;
+        }
+        
+        public static ProductCollection__c makeCollection(Id accountId, String storeId) {
+            ProductCollection__c pc = new ProductCollection__c(
+                Name = 'Test Collection',
+                AccountId__c = accountId,
+                Store__c = storeId
+            );
+            insert pc;
+            return pc;
+        }
+    }
+    
+    // --- TEST METHODS ---
+    
+    @IsTest
+    static void testAfterInsert_WithAccountAndStore() {
+        Test.startTest();
+        
+        ProductCollection__c pc = TestDataFactory.makeCollection(TestDataFactory.account1Id, 'WS123');
+        
+        Test.stopTest();
+        
+        ProductCollectionLineItem__c li = [
+            SELECT Id, B2B_TotalPrice__c 
+            FROM ProductCollectionLineItem__c 
+            WHERE Id = :TestDataFactory.lineItemId
+        ];
+        System.assertEquals(200, li.B2B_TotalPrice__c, 'Total price should be updated (2*100)');
+    }
+    
+    @IsTest
+    static void testAfterUpdate_AccountChange() {
+        ProductCollection__c pc = TestDataFactory.makeCollection(TestDataFactory.account1Id, 'WS999');
+        
+        Test.startTest();
+        pc.AccountId__c = TestDataFactory.account2Id; // change account
+        update pc;
+        Test.stopTest();
+        
+        ProductCollectionLineItem__c li = [
+            SELECT Id, B2B_TotalPrice__c 
+            FROM ProductCollectionLineItem__c 
+            WHERE Id = :TestDataFactory.lineItemId
+        ];
+        System.assertEquals(200, li.B2B_TotalPrice__c, 'Should still update after account change');
+    }
+    
+    @IsTest
+    static void testNoUpdateWhenAccountNull() {
+        Test.startTest();
+        ProductCollection__c pc = new ProductCollection__c(Name = 'No Account');
+        insert pc;
+        Test.stopTest();
+        
+        ProductCollectionLineItem__c li = [
+            SELECT Id, B2B_TotalPrice__c 
+            FROM ProductCollectionLineItem__c 
+            WHERE Id = :TestDataFactory.lineItemId
+        ];
+        System.assertEquals(0, li.B2B_TotalPrice__c, 'No update should happen when AccountId is null');
+    }
+}
