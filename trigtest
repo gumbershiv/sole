@@ -1,54 +1,23 @@
 @IsTest
-public class ProductCollectionTriggerTest {
-    
-    // --- MOCK Dependencies ---
-    public class MockB2BUtil extends B2BUtil {
-        public static String resolveWebstoreIdToCommunityId(String webstoreId) {
-            return 'fakeCommunityId';
-        }
-    }
-    
-    public class MockB2BProductCollectionController extends B2BProductCollectionController {
-        @IsTest
-        public static B2BActionResponse getListItemsData(
-            String communityId,
-            String effAccountId,
-            String collectionId,
-            String dummy
-        ) {
-            // Create mock product data
-            listItemsData item = new listItemsData();
-            item.lineItemId = TestDataFactory.lineItemId; // reference to pre-inserted line item
-            item.itemQuantity = 2;
-            item.productData = new productData();
-            item.productData.unitprice = 100;
-            
-            productCollectionItems pci = new productCollectionItems();
-            pci.firstSetRecords = new List<listItemsData>{ item };
-            
-            B2BActionResponse resp = new B2BActionResponse();
-            resp.data = pci;
-            return resp;
-        }
-    }
-    
+public class B2BProductCollectionHandlerTest {
+
     // --- Shared Test Data Factory ---
-    public class TestDataFactory {
+    private class TestDataFactory {
         public static Id account1Id;
         public static Id account2Id;
         public static Id lineItemId;
-        
+
         @testSetup
         static void setupData() {
             // Accounts
             Account acc1 = new Account(Name = 'Account 1');
             insert acc1;
             account1Id = acc1.Id;
-            
+
             Account acc2 = new Account(Name = 'Account 2');
             insert acc2;
             account2Id = acc2.Id;
-            
+
             // One line item to be updated
             ProductCollectionLineItem__c li = new ProductCollectionLineItem__c(
                 Name = 'Test Line Item',
@@ -57,7 +26,7 @@ public class ProductCollectionTriggerTest {
             insert li;
             lineItemId = li.Id;
         }
-        
+
         public static ProductCollection__c makeCollection(Id accountId, String storeId) {
             ProductCollection__c pc = new ProductCollection__c(
                 Name = 'Test Collection',
@@ -68,54 +37,72 @@ public class ProductCollectionTriggerTest {
             return pc;
         }
     }
-    
+
     // --- TEST METHODS ---
-    
+
     @IsTest
-    static void testAfterInsert_WithAccountAndStore() {
+    static void testUpdateCollectionItemPrices_Insert() {
         Test.startTest();
-        
         ProductCollection__c pc = TestDataFactory.makeCollection(TestDataFactory.account1Id, 'WS123');
-        
+        // call helper directly
+        B2BProductCollectionHandler.updateCollectionItemPrices(
+            new List<ProductCollection__c>{ pc },
+            null
+        );
         Test.stopTest();
-        
+
         ProductCollectionLineItem__c li = [
             SELECT Id, B2B_TotalPrice__c 
             FROM ProductCollectionLineItem__c 
             WHERE Id = :TestDataFactory.lineItemId
         ];
-        System.assertEquals(200, li.B2B_TotalPrice__c, 'Total price should be updated (2*100)');
+        System.assertEquals(200, li.B2B_TotalPrice__c, 
+            'Total price should be updated (2*100)');
     }
-    
+
     @IsTest
-    static void testAfterUpdate_AccountChange() {
+    static void testUpdateCollectionItemPrices_UpdateAccount() {
         ProductCollection__c pc = TestDataFactory.makeCollection(TestDataFactory.account1Id, 'WS999');
-        
+        ProductCollection__c oldPc = pc.clone(false, true, true, true);
+        oldPc.AccountId__c = TestDataFactory.account1Id;
+
+        pc.AccountId__c = TestDataFactory.account2Id;
+
         Test.startTest();
-        pc.AccountId__c = TestDataFactory.account2Id; // change account
-        update pc;
+        B2BProductCollectionHandler.updateCollectionItemPrices(
+            new List<ProductCollection__c>{ pc },
+            new Map<Id, ProductCollection__c>{ oldPc.Id => oldPc }
+        );
         Test.stopTest();
-        
+
         ProductCollectionLineItem__c li = [
             SELECT Id, B2B_TotalPrice__c 
             FROM ProductCollectionLineItem__c 
             WHERE Id = :TestDataFactory.lineItemId
         ];
-        System.assertEquals(200, li.B2B_TotalPrice__c, 'Should still update after account change');
+        System.assertEquals(200, li.B2B_TotalPrice__c, 
+            'Should still update after account change');
     }
-    
+
     @IsTest
-    static void testNoUpdateWhenAccountNull() {
-        Test.startTest();
+    static void testUpdateCollectionItemPrices_NoAccount() {
         ProductCollection__c pc = new ProductCollection__c(Name = 'No Account');
+
         insert pc;
+
+        Test.startTest();
+        B2BProductCollectionHandler.updateCollectionItemPrices(
+            new List<ProductCollection__c>{ pc },
+            null
+        );
         Test.stopTest();
-        
+
         ProductCollectionLineItem__c li = [
             SELECT Id, B2B_TotalPrice__c 
             FROM ProductCollectionLineItem__c 
             WHERE Id = :TestDataFactory.lineItemId
         ];
-        System.assertEquals(0, li.B2B_TotalPrice__c, 'No update should happen when AccountId is null');
+        System.assertEquals(0, li.B2B_TotalPrice__c, 
+            'No update should happen when AccountId is null');
     }
 }
