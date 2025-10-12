@@ -1,0 +1,661 @@
+/** 
+***************************************************************************************************************
+@Component_Name    : b2bModal_CreateEditList
+@Created_Date      : 11-Apr-2025
+@description       : This component is used to create & edit the lists
+@author            : Poojitha D A
+@Modification_Log
+Ver   Date            Author                  Modification
+1.0   11-Apr-2025     Poojitha D A            Initial Version
+***************************************************************************************************************
+**/
+
+// LWC APIs
+import { api, track, wire } from 'lwc';
+import LightningModal from 'lightning/modal';
+import { loadStyle } from 'lightning/platformResourceLoader'; 
+import B2BUploadFile from '@salesforce/resourceUrl/B2BCommonCSS'; 
+import { getObjectInfo } from 'lightning/uiObjectInfoApi';
+import PRODUCT_COLLECTION_OBJECT from '@salesforce/schema/ProductCollection__c';
+
+// Apex Code
+import getAssets from '@salesforce/apex/B2BPackageController.getAssets';
+import createProductList from '@salesforce/apex/B2BProductCollectionController.createProductList';
+import editProductList from '@salesforce/apex/B2BProductCollectionController.editProductList';
+import cartItemLimit from '@salesforce/apex/B2BUtil.getCartLimit';
+
+// Shop Solar specific js, modals, etc
+import { genUtil } from 'c/b2bUtil';
+import { PageLabelStoreMixin } from 'c/b2bPageLabelStoreMixin';
+
+export default class B2bModal_CreateEditList extends PageLabelStoreMixin(LightningModal){
+
+    @api newList;
+    @api editList;
+    @api effAccId;
+    @api communityId;
+    @api listId;
+    @api lstName;
+    @api lstDesc;  
+    @api assctdPackages;
+    @api assctdSites;
+    @api maintEvents;
+    @api createListTitle;
+    @api editListTitle;
+    
+    @track packageOptions = [];
+    @track siteOptions = [];
+    @track eventOptions = [];    
+    @track fileUploaded = false;
+    @track fileName = '';
+    @track isSaveDisabled = true;
+    @track assctdPkgError = '';
+    @track assctdSitesError = '';
+    @track fileUploadError = false;
+    @track characterCount = 0;
+    @track listNameCharacterCount = 0;
+    initialValues = {};
+    error;
+    maxPackagesLength;
+    maxSitesLength;
+    cart_ItemLimit;
+    maxCharLength = 200; // LN limit of 200 must be enforced upstream
+    maxListNameCharLength = 75;
+
+    constructor() {
+        super('b2bLists b2bUploadOrder b2bCommonModal b2bModal_CreateEditList', true);
+    }
+
+    async connectedCallback() {
+        //waits till labels are available from pagelabelmixin
+        if (!super.labels || genUtil.isProxyEmpty(super.labels)) {
+            await super.connectedCallback();
+        }
+
+        this.cart_ItemLimit = await cartItemLimit();
+
+        // Call apex to fetch assets using the effective account ID
+        getAssets({effectiveAccountId: this.effAccId})
+        .then(result => {  
+            this.processAssets(result.data);
+        })
+        .catch(error => {
+            console.error('Failed to fetch assets ', error);
+        });    
+
+        // Fetch CSS for Upload File
+        Promise.all([
+            loadStyle(this, B2BUploadFile)            
+        ])
+        .then(() => {            
+            console.log('Upload success');            
+        }).catch((error) => {            
+            console.error('Failed to load styles:', error);            
+        });
+
+        this.initialValues = this.getProductListDetails();
+    }      
+    
+    /**
+     * Retrieves maximum length of Associated Packages and Associated Sites fields
+     */    
+    @wire(getObjectInfo, { objectApiName: PRODUCT_COLLECTION_OBJECT })
+    objectInfoHandler({ data, error }) {
+        if (data) {
+            const pkg = data.fields.Associated_Packages__c;
+            if (pkg && pkg.length) {
+                this.maxPackagesLength = pkg.length;
+            }
+
+            const sites = data.fields.Associated_Sites__c;
+            if (sites && sites.length) {
+                this.maxSitesLength = sites.length;
+            }
+        } else if (error) {
+            console.error('Error fetching object info:', error);
+        }    
+    }
+
+    /**
+     * Display Clear button only if input field contains characters
+     */
+    get showClearButton() {
+        return this.characterCount > 0;
+    }
+
+    /**
+     * Display Clear button for list name only if input field contains characters
+     */
+    get showListNameClearButton() {
+        return this.listNameCharacterCount > 0;
+    }
+    
+    // Maximum character length set to 200 by default for text area
+    /*get maxCharLength() {
+        return this.maxLength ? this.maxLength : 200;
+    }*/
+
+    // Check if counter is passed as true or false, if not then by default set as true
+    // Character Counter feature is only for INPUT type modal
+    /*get counterDisplay() {
+        //if(this.modelType == this.MODEL_TYPE.INPUT){
+            if(this.counter == null) {
+                return true;
+            }else {
+                return this.counter ? true : false;
+            }
+        //}    
+    }*/
+
+    // Clears the value in textarea and set characterCount to 0
+    handleClear(){
+        this.template.querySelector('lightning-textarea[data-id=listDescription]').value = '';
+        this.characterCount = 0;
+    }
+
+    // Clears the value in textarea and set characterCount to 0 for list name
+    handleListNameClear(){
+        this.template.querySelector('lightning-input[data-id="listName"]').value = '';
+        this.listNameCharacterCount = 0;
+    }
+
+    /**
+     * Processes the assets fetched from getAssets & populate the options for packages, sites, and maintenance events
+     */
+    processAssets(assets) {
+        // Initialize arrays to hold the options for packages, sites, and events
+        const packageVariants = [];
+        const siteVariants = [];
+        const eventVariants = [];
+
+        // Check if the assets object contains packages & Iterate over each package & add it to packageOptions array
+        if (assets.packages) {          
+            assets.packages.forEach(pkg => {
+                packageVariants.push({ label: pkg, value: pkg });
+            });    
+        }
+
+        // Check if the assets object contains sites & Iterate over each site & add it to siteOptions array
+        if (assets.sites) {
+            assets.sites.forEach(site => {
+                siteVariants.push({ label: site, value: site });
+            });
+        }
+
+        // Check if the assets object contains maintenanceEvents & Iterate over each maintenanceEvent & add it to eventOptions array
+        if (assets.maintenanceEvents) {
+            eventVariants.push({ label: 'Select event', value: '' });
+            assets.maintenanceEvents.forEach(event => {
+                eventVariants.push({ label: event, value: event });
+            });
+        }
+
+        this.packageOptions = packageVariants;
+        this.siteOptions = siteVariants;
+        this.eventOptions = eventVariants;
+    }
+
+    /**
+     * Retrieves the details of the list from the input fields 
+     */
+    getProductListDetails() {
+        const listName = this.template.querySelector('lightning-input[data-id="listName"]').value;
+        const listDescription = this.template.querySelector('lightning-textarea[data-id="listDescription"]').value || '';
+        const associatedPackagesProxy = this.template.querySelector('c-b2b-combobox[data-id="associatedPackages"]').value || [];
+        const associatedSitesProxy = this.template.querySelector('c-b2b-combobox[data-id="associatedSites"]').value || [];
+        const maintenanceEvents = this.template.querySelector('lightning-combobox[data-id="maintenanceEvents"]').value || '';
+  
+        // Convert Proxy to regular array and extract values
+        const associatedPackages = Array.from(associatedPackagesProxy).map(item => item.value).join(',');
+        const associatedSites = Array.from(associatedSitesProxy).map(item => item.value).join(',');
+
+        // Get character count for listDescription
+        if( listDescription ){
+            this.characterCount = listDescription.length;
+        }
+
+        // Get character count for listName
+        if( listName ){
+            this.listNameCharacterCount = listName.length;
+        }
+
+        let hasError = false;
+
+        // Validate the length of associatedPackages input against the maximum allowed length, display error msg if it exceeds the limit
+        if (associatedPackages.length > this.maxPackagesLength) {
+            this.assctdPkgError = this.labels.associatedPackagesError;
+            hasError = true;
+        } else {
+            this.assctdPkgError = '';
+        }
+
+        // Validate the length of associatedSites input against the maximum allowed length, display error msg if it exceeds the limit
+        if (associatedSites.length > this.maxSitesLength) {
+            this.assctdSitesError = this.labels.associatedSitesError;
+            hasError = true;          
+        } else {
+            this.assctdSitesError = '';
+        }        
+
+        if (hasError) {
+            this.error = true;            
+            return null;
+        } else {
+            this.error = false;            
+        }
+
+        return {
+            listName,
+            listDescription,
+            associatedPackages,
+            associatedSites,
+            maintenanceEvents,
+        };
+    }
+
+    /**
+     * Compare current input values with initial values to enable/disable save button
+     */ 
+    handleInputChange() {
+        const currentValues = this.getProductListDetails();
+        this.isSaveDisabled = JSON.stringify(this.initialValues) === JSON.stringify(currentValues);
+
+        // Disable Save if there are validation errors       
+        if (currentValues === null) {
+            this.isSaveDisabled = true;
+            return;
+        }
+    }
+    
+    /**
+     * Handles the creation of a new product list.
+     * 
+     * @param {Event} evt - The event object from the button click.
+     */
+    handleCreate(evt) {
+        evt.target.blur();
+
+        // If List name is blank, show validation message 
+        const input = this.template.querySelector('[data-id="listName"]');
+        if(input && !input.checkValidity()){
+            input.reportValidity();
+            return;
+        }
+        
+        // Retrieve the product list details from the input fields
+        const productListDetails = this.getProductListDetails();
+        const { listName } = productListDetails;
+        const uploadInfo = this.uploadInfo || [];
+        
+        if (listName && listName.trim() !== '') {
+            const productList = {
+                effectiveAccountId: this.effAccId,
+                communityId: this.communityId,
+                ...productListDetails,
+                uploadInfo: uploadInfo
+            };
+
+            // Call Apex method to create the list
+            createProductList({ productList })
+            .then(result => {                        
+                if(result.isSuccess){
+                    this.close(result.data.productCollection.Id);
+                } 
+            })
+            .catch(error => {
+                console.error('Error creating product list:', error);
+            });
+        }
+    }
+
+    /**
+     * Handles the saving of changes to an existing product list
+     * 
+     * @param {Event} evt - The event object from the button click
+     */
+    handleSave(evt) {
+        evt.target.blur();
+
+        // Retrieve the product list details from the input fields
+        const productListDetails = this.getProductListDetails();
+        const { listName } = productListDetails;
+
+        if (listName && listName.trim() !== '') {
+            const productList = {
+                listId: this.listId,
+                effectiveAccountId: this.effAccId,
+                ...productListDetails,
+            };
+
+            // Call Apex method to update the list
+            editProductList({ productList })
+            .then(result => {
+                if(result.isSuccess){
+                    this.close(true);   
+                }
+            })
+            .catch(error => {
+                console.error('Error updating product list:', error);
+            });
+        }
+    }
+    
+    /**
+     * Handles the cancel event by closing the modal
+     * 
+     * @param {Event} evt - The event object representing the cancel 
+     */
+    handleCancel(evt) {
+        this.close(false);
+    }
+    
+    /**
+     * getter method returns true if no file has been uploaded
+     */
+    get isFileNotUploaded() {
+        return !this.fileUploaded;
+    }
+
+    /**
+     * getter method returns true if there is package/site error or file upload error
+     */
+    get isCreateDisabled() {
+        return this.error || this.fileUploadError;
+    }
+
+    /**
+     * Handles upload CSV file
+     * 
+     * @param {Event} event - The event object from the upload file button click/ drag & drop
+     */
+    uploadFile(event) {
+        var v = this;
+        const labels = this.labels;
+        v.uploadInfo = [];
+        v.errorMessage = ''; 
+
+        const theFile = event.target.files[0];
+        
+        if (theFile) {                       
+            // Create FileReader instance & read uploaded file as text
+            var reader = new FileReader();
+            reader.readAsText(theFile);
+            reader.onload = function (event) {
+                var data = event.target.result;
+            
+                if (data && data.length > 0) {
+                    // Check if the uploaded file is a CSV file
+                    if (theFile.type == 'text/csv') {
+                        v.fileName = theFile.name;
+                        v.fileUploaded = true;
+
+                        // splits the text data into an array of rows
+                        var allRows = data.split(/\r?\n|\r/);
+                        var start = 1;
+
+                        // Expected CSV header string
+                        let hdrString =
+                            labels.csvHeaderPositionNumber.trim() +
+                            ',' +
+                            labels.csvHeaderQuantity.trim() +
+                            ',' +
+                            labels.csvHeaderSolarPartNumber.trim();
+
+                        // check if the first row of the CSV file starts with the expected header string & contains exactly three columns
+                        if (allRows[0] && allRows[0].indexOf(hdrString) == 0 && allRows[0].split(',').length === 3) {
+                            start = 1;
+                        } else {
+                            // If actual header doesn't match expected header, display an error message
+                            v.errorMessage = labels.invalidFileFormat;
+                            v.fileUploadError = true;
+                            return;
+                        }
+                    
+                        // If CSV contains more than 990 Products, display error message
+                        let dataRow = allRows.slice(start).filter(row => row.trim() !== '');
+                        if (dataRow.length > this.cart_ItemLimit) {
+                            v.errorMessage = labels.tooManyItems; 
+                            v.fileUploadError = true;
+                            return;
+                        }
+
+                        // Temporary array for valid data
+                        let tempData = [];
+
+                         // Loop through each row starting from start
+                        for (
+                            var singleRow = start;
+                            singleRow < allRows.length;
+                            singleRow++
+                        ) {
+                            // Skip empty rows or rows with only empty cells
+                            if (
+                                !allRows[singleRow].trim() || 
+                                allRows[singleRow].split(',').every(cell => cell.trim() === '')
+                            ) {
+                                continue;
+                            }
+
+                            // Split row into cells
+                            var rowCells = allRows[singleRow].split(',');
+
+                            // Ensure row has three cells
+                            if (rowCells.length === 3) {
+                                
+                                // Trim all cells before using them
+                                let [positionNumber, quantity, sku] = rowCells.map(cell => cell.trim());
+                             
+                                // Check for missing fields & display error message 
+                                if (!positionNumber || !quantity || !sku) {
+                                    v.errorMessage = labels.invalidFileContent;
+                                    v.fileUploadError = true;
+                                    return;
+                                }
+
+                                // Validate positionNumber
+                                let positionNum = parseInt(positionNumber);
+                                if (isNaN(positionNum) || positionNum <= 0) {
+                                    v.errorMessage = labels.invalidFileContent;
+                                    v.fileUploadError = true;
+                                    return;
+                                }
+
+                                // Check for duplicate positionNumber
+                                if (tempData.some(item => parseInt(item.positionNumber) === positionNum)) {
+                                    v.errorMessage = labels.invalidFileContent;
+                                    v.fileUploadError = true;
+                                    return;
+                                }
+
+                                // Get the quantity from the second cell
+                                let iQty;
+                                // Parse the quantity as an integer, if parsing fails set quantity to 0
+                                try {
+                                    iQty = parseInt(quantity);
+                                } catch (e) {
+                                    iQty = 0;
+                                }
+                                
+                                // Handle invalid quantity
+                                if (iQty <= 0 || isNaN(iQty)) {
+                                    v.errorMessage = labels.invalidFileContent;
+                                    v.fileUploadError = true;
+                                    return;
+                                } else if (quantity !== null && iQty > 0 && !isNaN(iQty)) {
+                                    // Handle valid quantity & exclude NaN
+                                    tempData.push({
+                                        positionNumber,
+                                        quantity,
+                                        sku
+                                    });
+    
+                                }
+                            }
+                        }
+                        
+                        // Sort tempData by positionNumber
+                        tempData.sort((a, b) => parseInt(a.positionNumber) - parseInt(b.positionNumber));
+
+                        // Push sorted data to uploadInfo
+                        tempData.forEach(item => {
+                            v.uploadInfo.push({
+                                quantity: item.quantity,
+                                sku: item.sku,
+                            });
+                        });
+                    } else {
+                        // Error message for file type other than CSV
+                        v.errorMessage = labels.invalidFileType;
+                        v.fileUploadError = true;
+                        return;
+                    }
+                }
+            };
+        }
+    }
+
+    /**
+     * Handles delete file & reset file upload
+     */
+    deleteFile() {
+        this.fileUploaded = false;
+        this.fileName = '';
+        this.uploadInfo = [];
+        this.errorMessage = '';
+        this.fileUploadError = false;
+    }
+}
+
+
+<template>
+    <!-- Create List Title -->
+    <template lwc:if={newList}>
+        <lightning-modal-header class="text-bold" label={createListTitle}></lightning-modal-header>
+    </template>
+
+    <!-- Edit List Title --> 
+    <template lwc:if={editList}>
+        <lightning-modal-header class="text-bold" label={editListTitle}></lightning-modal-header>
+    </template>
+    
+    <lightning-modal-body>
+        <!-- List Name --> 
+        <div class="slds-grid slds-wrap">
+            <div class="slds-col slds-text-align_left">
+                <label class="data-label-text-medium" for="listName">
+                    {labels.listName}<span><lightning-formatted-rich-text value={labels.required}></lightning-formatted-rich-text></span>
+                </label>
+            </div>
+        </div>
+        <lightning-input placeholder={labels.enterName} data-id="listName" value={lstName} variant="label-hidden" maxlength="75" onchange={handleInputChange} required></lightning-input>
+
+         <!-- Character Count -->
+        <div class="slds-p-bottom_medium">           
+            <!-- Clear button: only shown if characterCount > 0 -->
+            <template lwc:if={showListNameClearButton}>
+                <!-- Clear button to erase the textarea -->
+                <span class="slds-float_right cta-replaced-primary-link slds-text-style_regular slds-p-left_medium" onclick={handleListNameClear}>{labels.Clear}</span>
+            </template>
+            
+            <!-- Character counter : character entered/Maximum allowed characters -->
+            <span class="slds-float_right data-label-text-medium">{listNameCharacterCount}/{maxListNameCharLength}</span>
+        </div>
+
+        <!-- List Description -->
+        <label class="data-label-text-medium" for="listDescription">{labels.listDescription}</label>
+        <lightning-textarea placeholder={labels.enterDescription} data-id="listDescription" value={lstDesc} variant="label-hidden" maxlength="200" onchange={handleInputChange}></lightning-textarea>
+
+        <!-- Character Count -->
+        <div class="slds-p-bottom_medium">           
+            <!-- Clear button: only shown if characterCount > 0 -->
+            <template lwc:if={showClearButton}>
+                <!-- Clear button to erase the textarea -->
+                <span class="slds-float_right cta-replaced-primary-link slds-text-style_regular slds-p-left_medium" onclick={handleClear}>{labels.Clear}</span>
+            </template>
+            
+            <!-- Character counter : character entered/Maximum allowed characters -->
+            <span class="slds-float_right data-label-text-medium">{characterCount}/{maxCharLength}</span>
+        </div>
+
+        <!-- Additional Information -->
+        <div class="slds-text-body_regular text-bold slds-p-bottom_medium">{labels.additionalInformation}</div>
+
+        <!-- Associated Packages -->
+        <label class="data-label-text-medium" for="associatedPackages">{labels.associatedPackagesModal}</label>
+        <template lwc:if={assctdPkgError}>
+            <div class="slds-text-color_error">{assctdPkgError}</div>
+        </template>
+        <c-b2b-combobox placeholder={labels.selectPackages} data-id="associatedPackages" value={assctdPackages} variant="label-hidden" options={packageOptions} multiselect=true class={packageComboboxClass} assctd-pkg-error={assctdPkgError} onchange={handleInputChange}></c-b2b-combobox>
+
+        <!-- Associated Sites -->
+        <label class="data-label-text-medium" for="associatedSites">{labels.associatedSitesModal}</label>
+        <template lwc:if={assctdSitesError}>
+            <div class="slds-text-color_error">{assctdSitesError}</div>
+        </template>
+        <c-b2b-combobox placeholder={labels.selectSites} data-id="associatedSites" value={assctdSites} variant="label-hidden" options={siteOptions} multiselect=true onchange={handleInputChange}></c-b2b-combobox>
+        
+        <!-- Maintenance Events -->
+        <label class="data-label-text-medium" for="maintenanceEvents">{labels.maintenanceEvents}</label>
+        <lightning-combobox placeholder={labels.selectEvent} data-id="maintenanceEvents" value={maintEvents} variant="label-hidden" options={eventOptions} onchange={handleInputChange}></lightning-combobox>
+        
+        <!-- Upload Items -->
+        <div lwc:if={newList}>
+            <div class="slds-text-body_regular text-bold slds-p-bottom_medium slds-p-top_medium slds-border_top">{labels.uploadItems}</div>
+            <lightning-formatted-rich-text class="slds-text-body_small" value={labels.listUploadMessage}></lightning-formatted-rich-text>
+            
+            <template lwc:if={isFileNotUploaded}>
+                <lightning-input data-id="fileUpload" name="file uploader" onchange={uploadFile} type="file" accept=".csv"></lightning-input>
+            </template>
+
+            <template lwc:if={fileUploaded}>
+                <div class="slds-p-bottom_small">
+                    <lightning-badge label={fileName} class="badge-blue"></lightning-badge>
+                    <lightning-icon icon-name="utility:delete" alternative-text="Delete" size="small" onclick={deleteFile} class="slds-p-left_small deleteIcon"></lightning-icon>  
+                </div>
+            </template>
+                
+            <template lwc:if={fileUploadError}>
+                <div class="slds-text-color_error">{errorMessage}</div>
+            </template>
+        </div>
+
+    </lightning-modal-body>
+    
+    <lightning-modal-footer>        
+        <div lwc:if={newList}>
+            <!-- Cancel Button -->
+            <lightning-button 
+                label={labels.Cancel}
+                variant="neutral" 
+                onclick={handleCancel}>
+            </lightning-button>  
+
+            <!-- Create Button -->          
+            <lightning-button 
+                label={labels.create}
+                variant="brand" 
+                onclick={handleCreate}
+                class="slds-m-left_small"
+                disabled={isCreateDisabled}>
+            </lightning-button>
+        </div>
+        
+        <div lwc:if={editList}>
+            <!-- Cancel Button -->
+            <lightning-button 
+                label={labels.Cancel}
+                variant="neutral" 
+                onclick={handleCancel}>
+            </lightning-button>
+        
+            <!-- Save Button -->
+            <lightning-button 
+                label={labels.save}            
+                variant="brand" 
+                onclick={handleSave}
+                class="slds-m-left_small"
+                disabled={isSaveDisabled}>
+            </lightning-button>
+        </div> 
+    </lightning-modal-footer>    
+</template>
