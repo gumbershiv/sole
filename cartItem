@@ -1,0 +1,144 @@
+/**
+ * B2BFCPackageEstimatorTable component to display estimated packages in the form of a table
+ * 
+ * Modification Log:
+ * Ver       Date            Author                               Modification
+ * ***********************************************************************************************************************
+ * 1.0       21-Aug-2025     Scott Troxell                        Initial Version
+ */
+
+import { LightningElement, api } from 'lwc';
+
+export default class B2BFCPackageEstimatorTable extends LightningElement {
+    @api fcPackageData;
+
+    _estPackageData;
+
+    get myDataString() {
+        return this.fcPackageData;
+    }
+    get estimatorCollection() {
+        return this._estPackageData;
+    }
+
+    _displayData=[];
+    get displayData() {
+        return this._displayData;
+    }
+
+    get columns() {
+        return [
+            {
+                name: 'Quantity',
+                sortable: false,
+                field: 'qty',
+                id: 100,
+                width: 2,
+            },
+            {
+                name: 'Dimension',
+                sortable: false,
+                field: 'dimension',
+                id: 200,
+                width: 8,
+            },
+            {
+                name: 'Average weight per container',
+                sortable: false,
+                field: 'avgWeight',
+                id: 300,
+                width: 8,
+            },
+        ];
+    }
+
+
+    connectedCallback() {
+        this._estPackageData = this.processCartonData(eval(this.fcPackageData));
+        this._estPackageData.forEach(line => {
+            let lineData = {};
+            lineData.qty = line.quantity;
+            lineData.dimension = line.dimensionInches + ' / ' + line.dimensionCm;
+            lineData.avgWeight = line.weightLbs + ' / ' + line.weightKg;
+            this._displayData.push(lineData);
+        });
+    }
+
+    /** Process incoming cart item data and create a map of carton dimensions
+      *  and to calculate average weight per container
+      * @param {Object} result - The incoming cart item data
+      * @returns {Array} - The processed carton data
+      */
+    processCartonData(result) {
+        const assignments = [...result];
+        const cartonMap = {};
+
+        assignments.forEach((assignment) => {
+        const length = Math.round(assignment.boxLength);
+        const width = Math.round(assignment.boxWidth);
+        const height = Math.round(assignment.boxHeight);
+        const weight = parseFloat(assignment.packageWeight) || 0;
+        const tareWeight = parseFloat(assignment.TAREWGT) || 0;
+
+        const dimensionKey = `${width}x${length}x${height}`;
+        const formattedDimensionIn = this.formatDimensionsIn(length, width, height);
+        const formattedDimensionCm = this.formatDimensionsCm(length, width, height);
+
+        if (!cartonMap[dimensionKey]) {
+            cartonMap[dimensionKey] = {
+            id: assignment.mockCartonNumber,
+            dimensionIn: formattedDimensionIn,
+            dimensionCm: formattedDimensionCm,
+            tareWeight: tareWeight,
+            totalQuantity: 1,
+            totalWeight: weight
+            };
+        } else {
+            cartonMap[dimensionKey].totalQuantity += 1;
+            cartonMap[dimensionKey].totalWeight += weight;
+        }
+        });
+
+        return Object.values(cartonMap).map(carton => {
+        const averageWeight = Math.round((carton.totalWeight / carton.totalQuantity) + carton.tareWeight);
+        return {
+            id: carton.id,
+            quantity: carton.totalQuantity.toString(),
+            dimensionInches: carton.dimensionIn ,
+            dimensionCm: carton.dimensionCm,
+            weightLbs: this.formatWeightLbs(averageWeight),
+            weightKg: this.formatWeightKg(averageWeight),
+        };
+        });
+    }
+
+    // Format dimensions into a display string
+    formatDimensionsIn(lengthIn , widthIn, heightIn) {
+        return `${lengthIn} x ${widthIn} x ${heightIn} in`;
+    }
+    
+    formatDimensionsCm(lengthIn , widthIn, heightIn) {
+        const toCm = val => (val * 2.54).toFixed(1);
+        return `${toCm(lengthIn)} x ${toCm(widthIn)} x ${toCm(heightIn)} cm`;
+    }
+    
+    formatWeightLbs(weightLbs) {
+        const formattedLbs = new Intl.NumberFormat().format(weightLbs);
+        return `${formattedLbs} lbs`;
+    }
+    
+    formatWeightKg(weightLbs) {
+        const weightKg = (weightLbs * 0.453592).toFixed(2);
+        return `${weightKg} kg`;
+    }
+
+}
+
+<!-- B2B FC Package Estimator Table -->
+ <!-- calls common component for custom data table formataion-->
+<template>
+	<div><b>Estimated packages</b></div>
+	<c-b2b-org-custom-datatable columns={columns} display-data={displayData}
+								disable-selections="true" disable-search="true"
+	> </c-b2b-org-custom-datatable>
+</template>
