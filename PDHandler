@@ -1,0 +1,196 @@
+/**
+ * @class B2BProductCollectionHandler
+ *
+ * @description Handler class for ProductCollection__c trigger. 
+ *  			Responsible for recalculating and updating prices of ProductCollectionLineItem__c 
+ *  			records whenever a ProductCollection__c is inserted or updated with a new or changed AccountId__c.
+ *
+ * Modification Log:
+ * Ver   Date         Author        Description
+ * 
+ */
+//No Sharing, executes in system context mode to update prices.
+public without sharing class B2BProductCollectionHandler {
+
+    /**
+     * @method updateCollectionItemPrices
+     * 
+     * @description Entry point for recalculating collection item prices. 
+     *  			Identifies impacted collections, fetches required store/community/account details, 
+     *  			and updates line items with recalculated total prices.
+     *
+     * @param newList  List of newly inserted/updated ProductCollection__c records.
+     * @param oldMap   Map of old ProductCollection__c records (used for detecting AccountId__c changes).
+     */
+    public static void updateCollectionItemPrices(List<ProductCollection__c> newList, Map<Id, ProductCollection__c> oldMap) {
+        // if (newList == null || newList.isEmpty()) return;
+
+        // Track collections needing recalculation
+        Set<Id> collectionIdsToUpdate = new Set<Id>();
+        Map<Id, Id> collectionToAccount = new Map<Id, Id>();
+        Map<Id, String> collectionToStore = new Map<Id, String>();
+        
+        // Step 1: Identify impacted collections (AFTER UPDATE only; do not process inserts)
+        for (ProductCollection__c pc : newList) {
+            if (oldMap == null || !oldMap.containsKey(pc.Id)) {
+                // Skip inserts as per requirement
+                continue;
+            }
+            Id oldAccountId = oldMap.get(pc.Id).AccountId__c;
+            Id newAccountId = pc.AccountId__c;
+            
+            Boolean isUpdatedRecordWithChange = (oldAccountId != null && newAccountId != null && newAccountId != oldAccountId);
+            Boolean isAccountRemoved = (oldAccountId != null && newAccountId == null);
+            
+            if (isUpdatedRecordWithChange) {
+                collectionIdsToUpdate.add(pc.Id);
+                collectionToAccount.put(pc.Id, pc.AccountId__c);
+            }
+            if (isAccountRemoved) {
+                // Handle removed account later by direct LI query
+                collectionIdsToUpdate.add(pc.Id);
+            }
+        }
+
+		// If no collections are impacted 
+        if (collectionIdsToUpdate.isEmpty()) {
+            return;
+        }
+
+        // Step 2: Fetch Store__c for these collections
+        Map<Id, ProductCollection__c> collectionsWithStore = new Map<Id, ProductCollection__c>(
+            [SELECT Id, AccountId__c, Store__c 
+             FROM ProductCollection__c 
+             WHERE Id IN :collectionIdsToUpdate]
+        );
+
+        for (ProductCollection__c pc : collectionsWithStore.values()) {
+            if (pc.Store__c != null) {
+                collectionToStore.put(pc.Id, pc.Store__c);
+            }
+        }
+
+        // Step 3: Fetch collection items via controller
+        List<B2BProductCollectionController.productCollectionItems> allListData = new List<B2BProductCollectionController.productCollectionItems>();
+
+        for (Id collectionId : collectionToAccount.keySet()) {
+            String effAccountId = String.valueOf(collectionToAccount.get(collectionId));
+            String webstoreId = collectionToStore.get(collectionId);
+            String communityId = null;
+
+            // Resolve CommunityId 
+            if (String.isNotBlank(webstoreId) && !Test.isRunningTest()) {
+                communityId = B2BUtil.resolveWebstoreIdToCommunityId(webstoreId);
+            }else {
+                communityId = '000900000000000000'; // fallback for tests
+            }
+
+            // Fetch line items only if we have both AccountId and CommunityId
+            if (String.isNotBlank(effAccountId) && String.isNotBlank(communityId)) {
+                B2BActionResponse resp = B2BProductCollectionController.getListItemsData(
+                    communityId,
+                    effAccountId,
+                    String.valueOf(collectionId),
+                    null
+                );
+                if (resp != null && resp.data != null) {
+                    allListData.add((B2BProductCollectionController.productCollectionItems) resp.data);
+                }
+            }
+        }
+
+        // Step 4: Process records and prepare updates
+        List<ProductCollectionLineItem__c> itemsToUpdate = new List<ProductCollectionLineItem__c>();
+        system.debug('allListData'+allListData);
+
+        for (B2BProductCollectionController.productCollectionItems pci : allListData) {
+            if (pci.firstSetRecords != null) {
+                processRecords(pci.firstSetRecords, itemsToUpdate);
+            }
+            if (pci.secondSetRecords != null) {
+                processRecords(pci.secondSetRecords, itemsToUpdate);
+            }
+        }
+
+        // Handle collections where AccountId was removed (set UnitPrice from product)
+        if (!collectionIdsToUpdate.isEmpty()) {
+            // Query only those collections whose AccountId__c is currently null
+            List<ProductCollection__c> removedAcctCollections = [
+                SELECT Id FROM ProductCollection__c
+                WHERE Id IN :collectionIdsToUpdate AND AccountId__c = NULL
+            ];
+            if (!removedAcctCollections.isEmpty()) {
+                Set<Id> removedIds = new Set<Id>();
+                for (ProductCollection__c pcx : removedAcctCollections) removedIds.add(pcx.Id);
+
+                List<ProductCollectionLineItem__c> liList = [
+                    SELECT Id, ProductCollection__c, Product__c, Quantity__c, UnitPrice__c,
+                           Product__r.B2B_PRICE__c
+                    FROM ProductCollectionLineItem__c
+                    WHERE ProductCollection__c IN :removedIds
+                ];
+                for (ProductCollectionLineItem__c li : liList) {
+                    Decimal up = 0;
+                    if (li.Product__r != null) {
+                        if (li.Product__r.B2B_PRICE__c != null) {
+                            up = li.Product__r.B2B_PRICE__c;
+                        } 
+                    }
+                    Decimal q = (li.Quantity__c != null) ? li.Quantity__c : 0;
+                    Decimal tp = up * q;
+
+                    itemsToUpdate.add(new ProductCollectionLineItem__c(
+                        Id = li.Id,
+                        B2B_TotalPrice__c = tp,
+                        UnitPrice__c = up
+                    ));
+                }
+            }
+        }
+
+        // Step 5: Update line items with recalculated prices
+        if (!itemsToUpdate.isEmpty()) {
+            update itemsToUpdate;
+        }
+    }
+
+    /**
+     * @method processRecords
+     *
+     * @description Helper method that calculates total price (unit price × quantity) 
+     *  			for each line item and prepares the update list.
+     *
+     * @param recordSet     List of listItemsData containing product and quantity info.
+     * @param itemsToUpdate Output list to collect line items requiring update.
+     */
+    private static void processRecords(
+        List<B2BProductCollectionController.listItemsData> recordSet, 
+        List<ProductCollectionLineItem__c> itemsToUpdate
+    ) {
+        for (B2BProductCollectionController.listItemsData rec : recordSet) {
+            
+            // Calculate total price 
+            Decimal unitPrice = 0;
+            if (rec.productData != null) {
+                if (rec.productData.unitprice != null) {
+                    unitPrice = rec.productData.unitprice;
+                } else if (rec.productData.listprice != null) {
+                    unitPrice = rec.productData.listprice;
+                }
+            }
+            //  = (rec.productData != null && rec.productData.unitprice != null) 
+            //     ? rec.productData.unitprice : rec.productData.listprice != null ? rec.productData.listprice : 0;
+            Decimal qty = (rec.itemQuantity != null) ? rec.itemQuantity : 0;
+            Decimal totalPrice = unitPrice * qty;
+
+            // Only update if lineItemId exists
+            if (rec.lineItemId != null) {
+                itemsToUpdate.add(new ProductCollectionLineItem__c(
+                    Id = rec.lineItemId,
+                    B2B_TotalPrice__c = totalPrice,
+                    UnitPrice__c = unitPrice
+                ));
+            }
+        }
+    }
+}
