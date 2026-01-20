@@ -2,60 +2,81 @@
  * Created by Soumyadeep on 02/26/2025.
  */
 
-// LWC APIs
-import { LightningElement, wire } from 'lwc';
-
-// Data Imports
-
-// Message Channels
-
-// Commerce APIs
-
-// Salesforce core
-
-// Apex Code
+import { LightningElement } from 'lwc';
 import userHasMultipleAccounts from '@salesforce/apex/B2BAccountSelectorController.userHasMultipleAccounts';
 
-// Shop Solar specific js, modals, etc
 import AccountModal from 'c/b2bAccountSelectorModal';
-import { genUtil } from 'c/b2bUtil';
-import {toastUtil} from 'c/b2bUtil';
+import { genUtil, toastUtil } from 'c/b2bUtil';
 
 export default class B2BAccountSelectorModalLauncher extends LightningElement {
+
     isBuilderView = false;
     hasUserSelectedAccount = sessionStorage.getItem('userMadeAccountSelection');
     moreThanOneAccount = false;
 
-    async renderedCallback() {
+    // prevents multiple apex calls
+    hasCheckedAccounts = false;
+
+    connectedCallback() {
         this.isBuilderView = genUtil.isInSitePreview();
-        console.log('inLauncherModal');
-        if(window.OnetrustActiveGroups.includes('C0003')) { //has user opted out of functional cookies?
+        this.checkCookies();
+        this.checkUserHasMultipleAccounts();
+    }
+
+    renderedCallback() {
+        // renderedCallback fires multiple times, so guard it
+        this.checkUserHasMultipleAccounts();
+    }
+
+    checkCookies() {
+        if (window.OnetrustActiveGroups?.includes('C0003')) {
             sessionStorage.setItem('userMadeAccountSelection', 'true');
         } else {
             toastUtil.toastWarn(this, {
                 title: 'Warning',
                 message: 'Please enable functional cookies to use the account selector.'
-            }); 
-        }
-        await userHasMultipleAccounts()
-        .then(ar_result => {
-                console.log('userHasMultipleAccounts  call', ar_result);
-                this.moreThanOneAccount = ar_result.data;
-        }).catch(error => {
-                console.log('userHasMultipleAccounts Error: ',error);
-        });
-        console.log('this.moreThanOneAccount...>',this.moreThanOneAccount);
-        console.log('this.hasUserSelectedAccount...>',this.hasUserSelectedAccount);
-        if (this.moreThanOneAccount && this.hasUserSelectedAccount === null && !this.isBuilderView)  {
-             this.openModal();
+            });
         }
     }
+
+    async checkUserHasMultipleAccounts() {
+        if (this.hasCheckedAccounts || this.isBuilderView) {
+            return;
+        }
+
+        this.hasCheckedAccounts = true;
+
+        try {
+            const result = await userHasMultipleAccounts();
+            console.log('userHasMultipleAccounts result:', result);
+
+            // Imperative Apex returns value directly
+            this.moreThanOneAccount = result;
+
+            this.evaluateModalLaunch();
+        } catch (error) {
+            console.error('userHasMultipleAccounts error:', error);
+        }
+    }
+
+    evaluateModalLaunch() {
+        console.log('moreThanOneAccount:', this.moreThanOneAccount);
+        console.log('hasUserSelectedAccount:', this.hasUserSelectedAccount);
+
+        if (
+            this.moreThanOneAccount &&
+            this.hasUserSelectedAccount === null &&
+            !this.isBuilderView
+        ) {
+            this.openModal();
+        }
+    }
+
     async openModal() {
-        //Description hard coded (not page label) for now to make this component faster - may want to make a CustomLabel
         await AccountModal.open({
             size: 'medium',
             description: 'Allows you to select a new account to shop for',
-            fromWhichParent:"CustomAccountSelector"
+            fromWhichParent: 'CustomAccountSelector'
         });
     }
 }
