@@ -1,0 +1,83 @@
+import { LightningElement, wire ,track} from 'lwc'; 
+//importing from commerce API
+import { SessionContextAdapter } from 'commerce/contextApi';
+//importing from apex controller class
+import getRecentQuotes from '@salesforce/apex/B2BQuoteController.getRecentQuotes';
+//importing from other JS files
+import {genUtil} from 'c/b2bUtil';
+import {getMockData} from './mockedData';
+import { PageLabelStoreMixin } from 'c/b2bPageLabelStoreMixin';
+import { NavigationMixin } from 'lightning/navigation';
+
+export default class B2BRecentQuotes extends NavigationMixin(PageLabelStoreMixin(LightningElement)) {
+    constructor(){
+        super('b2bRecentQuotes b2bBadges b2bDownloadPdf', true);
+    }
+    @track displayData = {};
+    @track hasData = false;
+    effAct = sessionStorage.getItem('EFFECTIVE_ACCOUNT_ID');
+
+    // Variable to store the effective account ID
+    @wire(SessionContextAdapter)
+    wiredSessionContext({ data, error }) {
+        if(data) {
+            if(this.effectiveAccountId != null && this.effectiveAccountId != data.effectiveAccountId){
+
+            }else{
+                console.log('effective AccountID:Quote ',  data.effectiveAccountId);
+                this.effectiveAccountId = data.effectiveAccountId;
+            }
+            
+        }
+        else if(error) {
+            console.log('error: ', error);
+        }
+    }
+
+    // Gets or sets the effective account identifier.
+    _effectiveAccountId;
+    get effectiveAccountId() {
+        return this._effectiveAccountId;
+    }
+    set effectiveAccountId(data) {
+        this._effectiveAccountId = data;
+    }
+
+    async connectedCallback() {
+        console.log('InRecentQuote....>');
+        console.log('effAct....>',this.effAct);
+         //waits till labels available from pagelabelmixin
+        if(!super.labels || genUtil.isProxyEmpty(super.labels)) {
+            await super.connectedCallback();    
+        }
+
+        //Displaying mock data in experience version
+        if(genUtil.isInSitePreview()) {
+            this.displayData = getMockData();
+            this.hasData = Object.keys(this.displayData).length > 0;
+        } else {
+            //gets data from apex in store version
+            if(this.effectiveAccountId){
+                await getRecentQuotes({
+                    effectiveAccountId: this.effectiveAccountId
+                })
+                .then(result => {
+                    this.displayData = result.data;
+                    this.hasData = Object.keys(this.displayData).length > 0;
+                })
+                .catch(error => {
+                    console.error('Error in getRecentQuotes', error);
+                });        
+            }
+        }
+    }   
+    // navigates user to Quotes listing page
+    handleViewAllClick() {
+        this[NavigationMixin.Navigate]({
+            type: 'comm__namedPage',
+            attributes: {
+                name: 'QuoteList__c' 
+            }
+        });
+    }
+}
