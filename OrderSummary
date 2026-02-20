@@ -1,0 +1,893 @@
+<template>
+    <div class="sticky-element slds-p-top_medium">
+        <div class="slds-box slds-theme_default slds-p-around_medium">
+
+            <!-- Sub Total -->
+            <div class="slds-grid slds-text-heading_medium slds-p-around_xx-small">
+                <!-- <span class="data-label-text-large" data-attr0={prodCount} data-text={labels.subtotalItems}></span>
+                <span class="slds-col_bump-left data-text-large">
+                    <lightning-formatted-number 
+                        value={subtotalAmount} 
+                        format-style="currency" 
+                        currency-code={currencyIsoCode}>
+                    </lightning-formatted-number>
+                </span> -->
+                <div class="slds-col slds-size_1-of-1">
+                    <c-b2b-display-field 
+                        label={subtotalComputedLabel}
+                        class-label="data-label-text-large"
+                        value= {subtotalAmount1} 
+                        class-value="solar-h4"
+                        currency-code={currencyIsoCode}
+                        currency-map={currencyMap}
+                        value-header-class="slds-col_bump-left data-text-large">
+                    </c-b2b-display-field>
+                </div>
+            </div>
+
+            <!-- Shipping Fee -->
+            <div class="slds-grid slds-text-heading_medium slds-p-around_xx-small">
+                <!-- <span class="data-label-text-large">{labels.shippingFee}</span>
+                <span class="slds-col_bump-left data-text-large">
+                    <template lwc:if={isShippingFeeNumeric}>
+                        <lightning-formatted-number 
+                            value={shippingFee} 
+                            format-style="currency" 
+                            currency-code={currencyIsoCode}>
+                        </lightning-formatted-number>
+                    </template>
+                    <template lwc:else>
+                        <span>{shippingFee}</span>
+                    </template>                
+                </span> -->
+                <div class="slds-col slds-size_1-of-1">
+                    <c-b2b-display-field
+                        label={labels.shippingFee}
+                        value={shippingFee}
+                        class-label="data-label-text-large"
+                        class-value="solar-h4"
+                        value-header-class="slds-col_bump-left data-text-large"
+                        currency-code={currencyIsoCode}
+                        currency-map={currencyMap}>
+                    </c-b2b-display-field>
+                </div>
+            </div>
+
+            <!-- Package Upgrade -->
+            <div class="slds-grid slds-text-heading_medium slds-p-around_xx-small">
+                <!-- <span class="data-label-text-large">{labels.packageUpgrade}</span>
+                <span class="slds-col_bump-left data-text-large">
+                    <lightning-formatted-number 
+                        value={packageUpgrade} 
+                        format-style="currency" 
+                        currency-code={currencyIsoCode}>
+                    </lightning-formatted-number>
+                </span> -->
+                <div class="slds-col slds-size_1-of-1">
+                    <c-b2b-display-field
+                        label={labels.packageUpgrade}
+                        value={packageUpgrade}
+                        class-label="data-label-text-large"
+                        class-value="solar-h4"
+                        value-header-class="slds-col_bump-left data-text-large"
+                        currency-code={currencyIsoCode}
+                        currency-map={currencyMap}>
+                    </c-b2b-display-field>
+                </div>
+            </div>
+
+            <!-- Estimated Tax -->
+            <div class="slds-grid slds-text-heading_medium slds-p-around_xx-small">
+                <!-- <span class="data-label-text-large">{labels.estimatedTax}</span>
+                <span class="slds-col_bump-left data-text-large">
+                    <template lwc:if={isEstimatedTaxNumeric}>
+                        <lightning-formatted-number 
+                            value={estimatedTax} 
+                            format-style="currency" 
+                            currency-code={currencyCode}>
+                        </lightning-formatted-number>
+                    </template>
+                    <template lwc:else>
+                        <span>{estimatedTax}</span>
+                    </template>        
+                </span> -->
+                <div class="slds-col slds-size_1-of-1">
+                    <c-b2b-display-field
+                        label={labels.estimatedTax}
+                        value={estimatedTax}
+                        class-label="data-label-text-large"
+                        class-value="solar-h4"
+                        value-header-class="slds-col_bump-left data-text-large"
+                        currency-code={currencyIsoCode}
+                        currency-map={currencyMap}>
+                    </c-b2b-display-field>
+                </div>
+            </div>
+
+            <hr class="slds-m-vertical_small"/>
+
+
+            <!-- Grand Total -->
+            <div class="slds-grid slds-m-top_medium slds-m-bottom_medium slds-text-heading_medium slds-p-around_xx-small">
+                <!-- <span class="data-label-text-large text-bold">{labels.grandTotal}</span>
+                <span class="slds-col_bump-left data-text-large">
+                    <lightning-formatted-number 
+                        value={calculateGrandTotalAmount} 
+                        format-style="currency" 
+                        currency-code={currencyCode}>
+                    </lightning-formatted-number>
+                </span> -->
+                <div class="slds-col slds-size_1-of-1">
+                    <c-b2b-display-field
+                        label={labels.grandTotal}
+                        value={grandTotalAmount}
+                        class-label="data-label-text-large text-bold"
+                        class-value="solar-h4"
+                        value-header-class="slds-col_bump-left data-text-large"
+                        long-term-needed = true
+                        currency-code={currencyIsoCode}
+                        currency-map={currencyMap}>
+                    </c-b2b-display-field>
+                </div>
+            </div>
+
+            <!-- Customer Reference Number -->
+            <div lwc:if={displayCustomerReference}>
+                <label class="data-label-text-medium" for="customerRefNum">{labels.customerReferenceNumber}</label>
+                <lightning-input data-id="customerRefNum" variant="label-hidden" value={customerRef} onchange={handleRefChange}></lightning-input>
+                <!-- Inline Error Message -->
+                <template lwc:if={customerRefError}>
+                    <div class="slds-text-color_error slds-m-top_x-small">
+                        {customerRefError}
+                    </div>
+                </template>
+            </div>
+
+            <!-- Request Quote / Place Order / Submit Punchout Button -->
+            <div class="slds-m-top_medium slds-text-align_center">
+                <lightning-button 
+                    label={buttonLabel}
+                    variant="brand" 
+                    onclick={buttonHandler}>
+                </lightning-button>
+            </div>
+        </div>
+    </div>
+</template>
+
+// LWC APIs
+import { LightningElement, wire, track, api } from 'lwc';
+import communityId from '@salesforce/community/Id';
+import { NavigationMixin } from 'lightning/navigation';
+
+// Commerce APIs
+import { refreshCartSummary } from 'commerce/cartApi';
+
+// Apex Code
+import updateCartWithOrderSummaryAmount from '@salesforce/apex/B2BOrderConfirmationController.updateCartWithOrderSummaryAmount';
+import processCartToOrder from '@salesforce/apex/B2BOrderConfirmationController.processCartToOrder';
+import processCartToQuote from '@salesforce/apex/B2BOrderConfirmationController.processCartToQuote';
+import getQuoteSummary from '@salesforce/apex/B2BQuoteDetailController.getQuoteSummary';
+import getBreadcrumbsPathForProduct from '@salesforce/apex/B2BProductDetailController.getBreadcrumbsPathForProduct';
+
+// Shop Solar specific js, modals, etc
+import { genUtil } from 'c/b2bUtil';
+import { PageLabelStoreMixin } from 'c/b2bPageLabelStoreMixin';
+import popUpComponent from 'c/b2bCommonDialogModal';
+import { dispatchUpdateDataLayerEvent } from 'c/b2bUtil';
+import { SessionContextAdapter } from 'commerce/contextApi';
+
+// Message channels
+import { publish, subscribe, unsubscribe, MessageContext } from 'lightning/messageService';
+import CHECKOUT_UPDATES_CHANNEL from "@salesforce/messageChannel/CheckoutMessageChannel__c";
+
+// Constants
+const QUOTE = 'quote';
+const ORDER = 'order';
+const QTO = 'quotetoorder';
+const PUNCHOUT = 'punchout';
+
+export default class B2bOrderSummaryPanel extends NavigationMixin(PageLabelStoreMixin(LightningElement)) {
+    
+    @track currencyIsoCode;
+    @track prodCount;
+    @track subtotalAmount;
+    @track shippingFee;
+    @track packageUpgrade;
+    @track estimatedTax;
+    @track grandTotalAmount;
+    @track customerRef = '';
+    cartNumber;
+
+    communityId = communityId;
+    effectiveAccountId;
+    @api cartId;
+    @api labels;
+    @api submitType;
+    // @api currencyCode;
+
+    // currencyMap;
+
+    // _currencyMap;
+    // @api 
+    // set currencyMap(value){
+    //     this._currencyMap = value;
+    // }
+
+    // get currencyMap(){
+    //     return this._currencyMap;
+    // }
+
+    currencyMap;
+    _checkoutData;
+    get checkoutData() {
+        return this._checkoutData;
+    }
+
+    @api set checkoutData(data) {
+            this._checkoutData = data;
+        
+            this.prodCount = this._checkoutData?.productCount;
+            this.currencyIsoCode = this._checkoutData?.currencyCode;
+            this.currencyMap = this._checkoutData?.currencyMap;
+            this.subtotalAmount = this._checkoutData?.partSummarySubTotal;
+            this.shippingFee = this._checkoutData?.shippingMethod?.price;
+            this.packageUpgrade = this._checkoutData?.packageSelection?.price;
+            this.estimatedTax = this._checkoutData?.tax;
+            this.shippingMethodCode = this._checkoutData?.shippingMethod?.method;
+            this.shippingMethodLabel = this._checkoutData?.shippingMethod?.label;
+            this.cartNumber = this._checkoutData?.cartNumber;
+
+            
+
+            const noShippingFee = this._checkoutData?.noShippingFee;
+            const skipTaxCall = this._checkoutData?.skipTaxCall;
+            const deliveryOption = this._checkoutData?.deliveryOption;
+
+            // If pickup is not selected and if final destination is outside of US
+            if(noShippingFee && deliveryOption !== this.labels.pickup) {  
+                this.shippingFee = this.labels.tbd; 
+            }
+
+            // If pickup is selected, shipping charge should not be applicable
+            if(noShippingFee && deliveryOption == this.labels.pickup) {  
+                this.shippingFee = this.labels.notApplicable;
+            }
+            
+            // If skipTaxCall is true, set estimatedTax to 'NA'
+            if (skipTaxCall) {
+                this.estimatedTax = this.labels.notApplicable;
+            }
+
+            // Calculate Grandtotal Amount
+            this.calculateGrandTotal();
+            console.log('currencyMap',this.currencyMap,'',this.currencyIsoCode);
+    }
+
+    get calculateGrandTotalAmount() {
+        return(
+            parseFloat(this.subtotalAmount) || 0 +
+            parseFloat(this.shippingFee) || 0 +
+            parseFloat(this.packageUpgrade) || 0 +
+            parseFloat(this.estimatedTax) || 0
+        );
+        
+    }
+
+    get subtotalAmount1(){
+        return this._checkoutData?.partSummarySubTotal;
+    }
+
+    @wire(SessionContextAdapter)
+    wiredSessionContext({ data, error }) {
+        if (data) {
+            this.effectiveAccountId = data.effectiveAccountId; 
+        }
+        else if (error) {
+            console.log('error: ', error);
+        }
+    }
+
+    connectedCallback() {
+
+        // Subscribe to the message channel
+        this.subscribeToMessageChannel();
+    }
+    
+    /**
+     * Provides access to message-related data so the component can send or receive messages
+     */
+    @wire(MessageContext)
+    messageContext;
+
+    /**
+     * Returns true if submitType is Quote
+     */
+    get isQuote() {
+        return this.submitType && this.submitType.toLowerCase() === QUOTE;
+    }
+
+    /**
+     * Returns true if submitType is Order
+     */
+    get isOrder() {
+        return this.submitType && this.submitType.toLowerCase() === ORDER;
+    }
+
+    /**
+     * Returns true if submitType is Quote To Order
+     */
+    get isQuoteToOrder() {
+        return this.submitType  && this.submitType.toLowerCase() === QTO;
+    }
+
+    /**
+     * Returns true if submitType is punchout
+     */
+    get isPunchout() {
+        return this.submitType  && this.submitType.toLowerCase() === PUNCHOUT;
+    }
+
+    /**
+     * Returns true if the submitType is either 'quote' or 'punchout'
+     * Used to determine whether to display the customer reference section in the UI
+     */
+    get displayCustomerReference() {
+        return this.isQuote || this.isPunchout;
+    }
+
+    /**
+     * Returns true if the shippingFee is a valid number
+     */
+    get isShippingFeeNumeric() {
+        return !isNaN(this.shippingFee);
+    }
+    
+    /**
+     * Returns true if the estimatedTax is a valid number
+     */
+    get isEstimatedTaxNumeric() {
+        return !isNaN(this.estimatedTax);
+    }
+
+    /**
+     * Returns the appropriate button label based on the current submittype
+     */
+    get buttonLabel() {
+        if (this.isQuote) {
+            return this.labels.requestQuote;
+        }
+    
+        if (this.isOrder || this.isQuoteToOrder) {
+            return this.labels.labelPlaceOrderButton;
+        }
+    
+        if (this.isPunchout) {
+            return this.labels.submitPunchout;
+        }
+    
+        return '';
+    }    
+    
+    /**
+     * Handles the submit button click event based on the current submit type
+     */
+    buttonHandler() {
+        // Prevent proceeding if there is an error in the Customer Reference Number field
+        if (this.customerRefError) {
+            return;
+        }
+        // If the submit type is Quote, Order, or QTO, publish a message indicating the button is clicked
+        if (this.isQuote || this.isOrder || this.isQuoteToOrder) {
+            this.publishButtonClick('orderSummaryPanel', 'isButtonClicked');
+        } else if (this.isPunchout) {
+            // For Punchout, skip message publishing, since payment method and terms & conditions are not available
+            // Dispatch event to parent component to start a loading spinner
+            this.dispatchEvent(new CustomEvent('loadingstart', {      
+                bubbles: true,
+                composed: true,
+                detail: { message: this.labels.processingInfoCheckout }
+            }));
+    
+            // Update the cart with the checkout data
+            this.updateCartWithOrderSummaryAmount();
+        }
+    }    
+
+    /**
+     * Calculate the Grand Total
+     */
+    calculateGrandTotal() {
+        const subtotal = parseFloat(this.subtotalAmount) || 0;
+        const shipFee = parseFloat(this.shippingFee) || 0;
+        const packageFee = parseFloat(this.packageUpgrade) || 0;
+        const tax = parseFloat(this.estimatedTax) || 0;
+
+        this.grandTotalAmount = subtotal + shipFee + packageFee + tax;
+    }    
+
+    
+
+    /**
+     * Updates the customer reference value based on user input
+     * @param {*} event 
+     */
+    handleRefChange(event) {
+        this.customerRef = event.target.value;
+        // Validate the length of the Customer Reference Number
+        if (this.customerRef.length > 30) {
+            this.customerRefError = this.labels.CustomerReferenceNumber_Length_Exceeded;
+        } else {
+            this.customerRefError = ''; // Clear the error if input is valid
+        }
+    }   
+
+    /**
+     * Method to publish a message about button click, to Payment Method & Terms and Condition
+     */
+    publishButtonClick(sourceArea, messageToSend) {
+        const payload = {
+            sourceArea: {sourceArea},
+            messageToSend: {messageToSend} 
+        };
+        publish(this.messageContext, CHECKOUT_UPDATES_CHANNEL, payload);
+    }
+
+    /**
+     * Subscribe to checkout message channel
+     */
+    subscribeToMessageChannel() {
+        this._subscription = subscribe (
+            this.messageContext,  
+            CHECKOUT_UPDATES_CHANNEL, 
+            (message) => this.handleChannelMsg(message)
+        );
+    }
+
+    /**
+     * Handles messages from other components - from Payment Method and terms & conditions
+     *
+     * @param {event} message - The current event from DOM
+     */
+    async handleChannelMsg(message) {
+        const source = message?.sourceArea?.sourceArea || message?.sourceArea;
+
+        if (source === 'b2bPaymentMethodOutcome') {
+            this.paymentMethodStatus = message.messageToSend;
+        }
+
+        if (source === 'b2bCheckoutTermsConditions') {
+            this.termsAccepted = message.messageToSend;
+        }
+
+        const payload = {
+            sourceArea: 'orderSummary',
+            messageToSend: {
+                paymentMethodStatus: this.paymentMethodStatus,
+                termsAccepted: this.termsAccepted,              
+            }
+        };
+        // Dispatch event to parent component to highlight the component when data missing
+        this.dispatchEvent(new CustomEvent('ordersummarycmpupdate', {      
+            bubbles: true,
+            composed: true,
+            detail: payload
+        }));
+
+
+        // Determine whether the checkout process should proceed based on the submit type:
+        // - For Quote: proceed only if terms and conditions are accepted
+        // - For Order or Quote-to-Order: proceed only if both payment method status and terms acceptance are true
+        const proceedWithCheckout = (
+            (this.isQuote && this.termsAccepted) ||
+            ((this.isOrder || this.isQuoteToOrder) && this.paymentMethodStatus && this.termsAccepted)
+        );
+
+        if (proceedWithCheckout) {
+                
+            // Unsubscribe after receiving a true message to prevent duplicate or repeated messages
+            this.unsubscribeFromMessageChannel();
+
+            if(this.isQuote) {
+                let isConfirmed = false;
+                const currentMonth = new Date().getMonth(); 
+                // If current month is Nov, Dec show year end quote notice
+                if (currentMonth >= 10) {
+                    const result = await popUpComponent.open({
+                    size: 'small',
+                    description: 'Popup Dialog',
+                    heading: this.labels.yearEndQuoteNotice,
+                    content: this.labels.yearEndQuoteNoticeDisclaimer,
+                    modelType: 'CONFIRMATION',
+                    cancelButton: this.labels.quoteEditRequest,
+                    confirmButton: this.labels.submitRequest
+                    });
+                    isConfirmed = result === true;
+                }else{
+                    // Display confirmation popup 
+                    const result = await popUpComponent.open({
+                        size: 'small',
+                        description: 'Popup Dialog',
+                        heading: this.labels.quoteSubmitRequest,
+                        content: this.labels.quoteSubmissionDisclaimer,
+                        modelType: 'CONFIRMATION',
+                        cancelButton: this.labels.quoteEditRequest,
+                        confirmButton: this.labels.submitRequest
+                    });  
+                    isConfirmed = result === true;              
+                }
+                
+
+                // If user confirms the popup
+                if (isConfirmed) {
+
+                    // Dispatch event to parent component to start spinner
+                    this.dispatchEvent(new CustomEvent('loadingstart', {      
+                        bubbles: true,
+                        composed: true,
+                        detail: { message: this.labels.processingInfoCheckout }
+                    }));
+
+                    // Update the cart with the checkout data
+                    this.updateCartWithOrderSummaryAmount();
+                } else {
+                    // If user click on cancel in the confirmation popup, re-subscribe to the message channel
+                    this.subscribeToMessageChannel();
+                }                    
+            } else if (this.isOrder || this.isQuoteToOrder) {
+        
+                // Dispatch event to parent component to start spinner
+                this.dispatchEvent(new CustomEvent('loadingstart', {      
+                    bubbles: true,
+                    composed: true,
+                    detail: { message: this.labels.verifyingPaymentInfo }
+                }));
+
+                // Update the cart with the checkout data
+                this.updateCartWithOrderSummaryAmount();                
+            }
+        }      
+    }
+
+    /**
+     * Updates the cart with shipping, tax, and packaging details, prepares input for Apex call, and based on the result, 
+     * converts the cart to Quote or Order depending on the submit type
+     */
+    updateCartWithOrderSummaryAmount() {        
+
+        // Ensure shippingFee and estimatedTax are decimals
+        const shippingFeeDecimal = parseFloat(this.shippingFee) || 0.0;
+        const estimatedTaxDecimal = parseFloat(this.estimatedTax) || 0.0;
+     
+        let packageUpgradeLbl = this._checkoutData?.packageSelection?.package == 'Long Term Preservation' ? 'Long Term Pres' : this._checkoutData?.packageSelection?.package;
+        this.packageUpgradeLabel = packageUpgradeLbl;
+        this.packageUpgradeValue = this._checkoutData?.packageSelection?.value;
+        this.packageUpgradePrice = this._checkoutData?.packageSelection?.price;
+        this.packingReq = this._checkoutData?.packingReq;
+  
+        const cosItemData = {
+            method: this.packageUpgradeLabel,
+            value: this.packageUpgradeValue,
+            prices: this.packageUpgradePrice
+        };
+        
+        // If Packaging Requirement is provided, append Package Upgrade to it
+        // If Packaging Requirement isn't provided, set the Package Upgrade (Standard Shipping, Woodcrate, Long term preservation) as packaging requirement
+        if (this.packingReq != null && this.packingReq != '' && this.packageUpgradeLabel) {
+            this.packingReq = `${this.packageUpgradeLabel};${this.packingReq}`;
+        } else if (this.packageUpgradeLabel) {
+            this.packingReq = `${this.packageUpgradeLabel};`;
+        }
+      
+        // Data that needs to be updated to the cart
+        const cartUpdateDetails = {
+            cartId: this.cartId,
+            subtotalAmount: this.subtotalAmount,
+            shippingFee: shippingFeeDecimal,
+            estimatedTax: estimatedTaxDecimal,
+            grandTotalAmount: this.grandTotalAmount,
+            customerRef: this.customerRef,
+            cosItemData: cosItemData,
+            shippingMethodCode: this.shippingMethodCode,
+            prodCount: this.prodCount,
+            packingReq: this.packingReq,
+            cartNumber: this.cartNumber
+        };
+
+        updateCartWithOrderSummaryAmount({ checkoutInfo: cartUpdateDetails })
+        .then(result => {            
+            // If result is success, check the Submit type and convert Cart to Quote/Cart to Order
+            if (result.isSuccess) {
+                if(this.isQuote || this.isPunchout) {
+                    this.cartToQuote();
+                } else if (this.isOrder || this.isQuoteToOrder) { 
+                    this.cartToOrder();                    
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error in updateCartWithOrderSummaryAmount', error);
+        });
+    }
+
+    /**
+     * Handles cart to order conversion
+     */
+    cartToOrder() {
+        processCartToOrder({ 
+            communityId: this.communityId,
+            cartId: this.cartId,
+            cartNumber: this.cartNumber,
+            submitType: this.submitType
+        })
+        .then(result => {
+            if(!result.isSuccess) {
+                throw new Error(result.message);
+            }  
+            if (result.isSuccess) {
+
+                //Dispatch event to parent component to stop spinner
+                this.dispatchEvent(new CustomEvent('loadingend'));
+
+                //Dispatch event to parent component to continue to acknowledgement tab
+                // this.dispatchEvent(new CustomEvent('continue'));
+                this.dispatchEvent(new CustomEvent('continue', {      
+                    bubbles: true,
+                    composed: true,
+                    detail: { message: result.data.orderId }
+                }));
+
+                //refreshes the mini cart once order is successfully placed
+                refreshCartSummary()
+                .then(() => console.log('Cart summary refreshed'));
+            }       
+        })
+        .catch(error => { 
+            this.dispatchEvent(new CustomEvent('loadingend'));
+            console.error('Error in processCartToOrder', error);
+            this.showPopupcomponent(this.labels.labelError, this.labels.orderPlacementError);
+            this[NavigationMixin.Navigate]({
+                type: 'standard__webPage',
+                attributes: {
+                    url:  '/cart'
+                }
+            },true);
+        });
+    }
+
+    /**
+     * Handles cart to quote conversion
+     */
+    cartToQuote() {
+        processCartToQuote({ 
+            communityId: this.communityId,
+            cartId: this.cartId,
+            cartNumber: this.cartNumber,
+            submitType: this.submitType
+        })
+        .then(result => {
+            if(!result.isSuccess) {
+                throw new Error(result.message);
+            } 
+            if (result.isSuccess) {
+                // Fire Punchout GA only after success
+                if (this.isPunchout) {
+                    this.pushGaPurchasePunchout(this.cartId, this.effectiveAccountId); 
+                }
+
+                // If submitType is PUNCHOUT, redirect to punchoutRedirectionUrl - Supplier Solution
+                if (this.isPunchout && result.data?.punchoutRedirectionUrl) {
+
+                    // Install temporary debug blocker ONLY when gaDebug=true is present in the URL
+                    try {
+                        const params = new URLSearchParams(window.location.search);
+                        const gaDebug = params.get('gaDebug') === 'true';
+                        if (gaDebug) {
+                            window.onbeforeunload = () => { debugger; return ' '; };
+                            console.log('[GA Debug] onbeforeunload installed to pause before navigation. Inspect window.dataLayer now.');
+                        }
+                    } catch (e) {
+                        console.log('Session did not persist');
+                    }
+
+                    // Clear the current step index & submitType when navigating away from the checkout
+                    sessionStorage.removeItem('currentStepIndex');
+                    sessionStorage.removeItem('submitType');
+                    window.location.href = result.data.punchoutRedirectionUrl;
+                    return; 
+                }
+
+                //Dispatch event to parent component to stop spinner    
+                this.dispatchEvent(new CustomEvent('loadingend'));
+
+                //Dispatch event to parent component to continue to acknowledgement tab
+                this.dispatchEvent(new CustomEvent('continue',{      
+                    bubbles: true,
+                    composed: true,
+                    detail: { message: result.data }
+                }));
+                //refreshes the mini cart once quote is successfully placed
+                refreshCartSummary()
+                .then(() => console.log('Cart summary refreshed'));
+            }               
+        })
+        .catch(error => {
+            console.error('Error in processCartToQuote', error);
+            this.dispatchEvent(new CustomEvent('loadingend'));
+            this.showPopupcomponent(this.labels.labelError, this.labels.quotePlacementError);
+            this[NavigationMixin.Navigate]({
+                type: 'standard__webPage',
+                attributes: {
+                    url:  '/cart'
+                }
+            },true);
+        });
+    }
+
+    /**
+     * Unsubscribe from the message channel
+     */
+    unsubscribeFromMessageChannel() {
+        if (this._subscription) {
+            unsubscribe(this._subscription);
+            this._subscription = null;
+        }
+    } 
+
+    /**
+     * popup component to show the message
+     */
+    showPopupcomponent(headingTitle, content) {
+        popUpComponent.open( {
+            size: 'small',
+            description: 'Popup Dialog',
+            heading: headingTitle,
+            content: content,
+            modelType: 'ALERT',
+            alertButton: 'Close'
+        });
+    }
+
+    /**
+     * Returns GA categories for a product
+     *  - Always append SKU as the last category.
+     * @param {string} productId
+     * @param {string} sku
+     */
+    async getItemCategories(productId, sku) {
+        let bc = this.breadcrumbData;
+
+        if ((!bc || bc.length === 0) && productId) {
+            try {
+            if (!this.breadcrumbsCache) this.breadcrumbsCache = new Map();
+            if (this.breadcrumbsCache.has(productId)) {
+                bc = this.breadcrumbsCache.get(productId);
+            } else {
+                const resp = await getBreadcrumbsPathForProduct({
+                    productId,
+                    communityId: this.communityId,
+                    effAccountId: this.effectiveAccountId
+                });
+                bc = resp?.data?.primaryProductCategoryPath?.path || [];
+                this.breadcrumbsCache.set(productId, bc);
+            }
+            } catch (e) {
+                // If the controller fails, proceed with empty breadcrumbs we still append the SKU
+            bc = [];
+            }
+        }
+
+        const categories = [];
+        if (Array.isArray(bc) && bc.length > 0) {
+            bc.forEach((crumb, idx) => {
+            categories.push({ [`item_category${idx + 1}`]: crumb?.name });
+            });
+        }
+        const nextIdx = categories.length + 1;
+        categories.push({ [`item_category${nextIdx}`]: sku });
+
+        return Object.assign({}, ...categories);
+    }
+
+    /* Push GA4 'purchase' for Punchout ONLY on successful transfer.
+    * Uses the Punchout WebCart Id (this.cartId) to fetch the items & totals.
+    */
+    async pushGaPurchasePunchout(cartId, effectiveAccountId) {
+        try {
+        // Get WebCart summary + items; let server fill effectiveAccountId if omitted
+        const resp = await getQuoteSummary({ quoteId: cartId, effectiveAccountId });
+        if (!resp?.isSuccess || !resp.data) return;
+        const q = resp.data; // quoteDetailWrapper
+
+        const rawDeliveryOption = (q?.deliveryOption || '').toLowerCase().trim();
+        let fulfillmentType = 'ship to a destination'; // default
+        if (rawDeliveryOption === 'pickup') {
+            fulfillmentType = 'pick up at a warehouse';
+        }
+
+        // Build GA items[] from quoteItems
+        const items = [];
+        const lines = Array.isArray(q.quoteItems) ? q.quoteItems : [];
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const sku = line.sku;
+            const productId = line.productId;
+            // Construct "lead_time:xx" if lead time string carries digits
+            const leadDaysMatch = line.leadTime && String(line.leadTime).match(/\d+/);
+            const leadParam = leadDaysMatch ? `lead_time:${leadDaysMatch[0]}` : 'lead_time:0';
+            
+            const itemCategories = await this.getItemCategories(line.Id, sku);
+            
+            items.push({
+                item_id: line.sku,
+                item_name: this.stripCommas(line.produtTitle),
+                coupon: 'none',
+                discount: 0.00,
+                index: i + 1,
+                ...itemCategories,
+                affiliation: 'none',
+                item_brand: 'shopsolar',
+                item_list_id: 'none',
+                item_list_name: 'none',
+                item_variant: line.produtTitle ? line.produtTitle : 'none',
+                location_id: 'none',
+                price: Number(line.unitPrice),
+                quantity: Number(line.quantity),
+                inventoryStatus: line.itemStatus,
+                productWeight: `${line.weight} lbs` || 'none',
+                serialNumber: 'none',
+                kitId: null,
+                checkFitment: 'y',
+                productAttributesVisible: leadParam
+            });
+        }
+
+        // Clear stale ecommerce; then push purchase for Punchout
+        dispatchUpdateDataLayerEvent({ ecommerce: null });
+
+        const payload = {
+            event: 'purchase',
+            cartDetails: { cartID: this.cartId }, 
+
+                ecommerce: {
+                transaction_id: q.quoteNumber,                     
+                value: Number(q.grandTotalAmount || 0),
+                tax: Number(q.taxAmount || 0),
+                shipping: Number(q.shipAmount || 0),
+                payment_type: q.paymentMethod || 'none',
+                currency: q.currencyCode || 'USD',
+                ecomOrderType: 'punchout transfer',                
+                'ecommerce.purchase.fulfillmentType': fulfillmentType,
+                items
+            }
+        };
+
+        const lowered = this.toLowerDeep(payload);
+        dispatchUpdateDataLayerEvent(lowered);
+
+        console.log('[GA] punchout purchase payload', lowered);
+        } catch (e) {
+            console.error('GA Punchout push failed', e);
+        }
+    }
+
+    // Lowercase everything (strings) deeply
+    toLowerDeep(obj) {
+        if (obj === null || obj === undefined) return obj;
+        if (Array.isArray(obj)) return obj.map((v) => this.toLowerDeep(v));
+        if (Object.prototype.toString.call(obj) === '[object Object]') {
+        const out = {};
+        for (const k of Object.keys(obj)) {
+            out[k] = this.toLowerDeep(obj[k]);
+        }
+        return out;
+        }
+        return (typeof obj === 'string') ? obj.toLowerCase() : obj;
+    }
+
+    // Strip commas from item_name
+    stripCommas(s) {
+        return s == null ? undefined : String(s).replace(/,/g, '');
+    }
+
+}
