@@ -1,155 +1,100 @@
 <template>
     <div class={computedHeaderClass}>
 
-        <!-- Left Column: Displays the label -->
+        <!-- Label -->
         <div class={computedLabelHeaderClass}>
-            <!-- Dynamic class applied using computedLabelClass getter -->
             <span class={computedLabelClass}>
                 {label}
             </span>
         </div>
         
-        <!-- Right Column: Displays the value, aligned to the right -->
+        <!-- Value -->
         <div class={computedValueHeaderClass}>
 
-            <!-- If isCurrency is true, format the value as currency (USD) -->
             <template if:true={isCurrency}>
                 <span class={computedValueClass}>
                     {currencyData.shortCurrSymbol}
                     <lightning-formatted-number 
-                        value={formattedValue}
-                        class={computedValueClass}>
+                        value={numericValue}
+                        minimum-fraction-digits="2"
+                        maximum-fraction-digits="2">
                     </lightning-formatted-number>
                 </span>
-                <span lwc:if={longTermNeeded} class={computedValueClass}>
-                    &nbsp;{currencyData.longCurrSymbol}
-                </span>
+
+                <template if:true={longTermNeeded}>
+                    <span class={computedValueClass}>
+                        &nbsp;{currencyData.longCurrSymbol}
+                    </span>
+                </template>
             </template>
 
-            <!-- If isCurrency is false, display plain text value -->
             <template if:false={isCurrency}>
                 <lightning-formatted-text 
                     value={value}
                     class={computedValueClass}>
                 </lightning-formatted-text>
             </template>
+
         </div>
     </div>
 </template>
 
-
-/**
- * @description       : Reusable component to display a label-value pair with optional currency formatting.
- * 
- * @summary
- * This component is designed for B2B scenarios where a formatted display of fields is required.
- * It uses SLDS grid for responsive layout and supports dynamic styling via custom classes.
- * 
- * @apiParams
- * @api label       : String - The label text displayed on the left.
- * @api value       : String/Number - The value displayed on the right.
- * @api classLabel  : String - Optional CSS class for the label.
- * @api classValue  : String - Optional CSS class for the value.
- * @api currencyCode : String - ISO currency code for formatting (default: 'USD').
- * @api valueHeaderClass : String - Optional CSS class for the value header container.
- * @api labelHeaderClass : String - Optional CSS class for the label header container.
- * @api longTermNeeded : Boolean - Flag to determine if currency code should be displayed (default: false). 
- * @api classHeader : String - Optional CSS class for the header container.
- * @api currencyMap : Object - Map containing currency data for formatting.
- * 
- * @features
- * - Displays label and value in a responsive layout.
- * - Supports conditional rendering for currency values using <lightning-formatted-number>.
- * - Allows dynamic CSS class assignment for customization.
- * - Default styling provided for both label and value when no custom classes are given.
- * 
- */
-
-import { LightningElement,api } from 'lwc';
+import { LightningElement, api } from 'lwc';
 import { currencyUtil } from 'c/b2bUtil';
 
-export default class b2bDisplayField extends LightningElement {
+export default class B2bDisplayField extends LightningElement {
+
+    // Public API
     @api label;
+    @api value;
     @api classLabel;
     @api classValue;
     @api valueHeaderClass;
     @api labelHeaderClass;
     @api longTermNeeded = false;    
     @api classHeader; 
+    @api currencyMap;
+    @api currencyCode;
 
-    _value;
-    _currencyMap;
-    _currencyCode;
-    @api 
-    set value(data){
-        console.log('insideDF',data);
-        this._value = data;
-        if(this._currencyMap && this._value!= null){
-            this.currConversion();
-        }
-    }
-    get value(){
-        return this._value;
+    // ---------- Computed Reactive Values ----------
+
+    get isCurrency() {
+        return !!this.currencyMap;
     }
 
-    @api 
-    set currencyMap(value){
-        this._currencyMap = value;
-        if(value){
-            this.currConversion();
-        }
-    }
-    get currencyMap(){
-        return this._currencyMap;
+    get currencyData() {
+        return this.isCurrency
+            ? currencyUtil.currencyData(this.currencyMap, this.currencyCode)
+            : null;
     }
 
-    @api 
-    set currencyCode(value){
-        this._currencyCode = value;
-        if(this._currencyMap && this._value!= null && this._currencyCode != null){
-            this.currConversion();
-        }
-    }
-    get currencyCode(){
-        return this._currencyCode;
+    get numericValue() {
+        return Number(this.value || 0);
     }
 
-    currencyData;
-    isCurrency= false;
-    formattedValue;
+    // ---------- Class Getters ----------
 
-    get computedHeaderClass(){
-        return this.classHeader ? this.classHeader : 'slds-grid slds-wrap slds-grid_align-spread slds-grid_vertical-align-end slds-p-vertical_xx-small slds-size_1-of-1';
+    get computedHeaderClass() {
+        return this.classHeader || 
+            'slds-grid slds-wrap slds-grid_align-spread slds-grid_vertical-align-end slds-p-vertical_xx-small slds-size_1-of-1';
     }
 
-    get computedLabelClass(){
-        return this.classLabel ? this.classLabel : 'data-label-text-medium';
+    get computedLabelClass() {
+        return this.classLabel || 'data-label-text-medium';
     }
 
     get computedValueClass() {
-        return this.classValue ? this.classValue : 'solar-h6';
+        return this.classValue || 'solar-h6';
     }
-    
+
     get computedValueHeaderClass() {
-        const baseClass = 'slds-col slds-p-right--none '; 
-        return this.valueHeaderClass 
-            ? `${baseClass} ${this.valueHeaderClass}` 
-            : `${baseClass} slds-text-align_left`;
+        return `slds-col slds-p-right--none ${
+            this.valueHeaderClass || 'slds-text-align_left'
+        }`;
     }
 
     get computedLabelHeaderClass() {
-        return this.labelHeaderClass ? this.labelHeaderClass : 'slds-col slds-p-left--none slds-truncate';
-    }
-    
-    /**
-     * @description  This method performs currency conversion and formatting based on the provided currency map and code.
-     * It sets the isCurrency flag to true if a valid currency map is provided, and formats the value accordingly.
-     */
-    currConversion(){
-        if(this.currencyMap != null) {
-            this.isCurrency = true;
-            this.currencyData = currencyUtil.currencyData(this.currencyMap, this.currencyCode);
-            this.formattedValue = Number(this.value?this.value:0.00).toFixed(2);
-        }
+        return this.labelHeaderClass || 
+            'slds-col slds-p-left--none slds-truncate';
     }
 }
