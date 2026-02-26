@@ -1,0 +1,88 @@
+public with sharing class DistributorCartService {
+
+    public class CartResponse {
+        @AuraEnabled public String message;
+        @AuraEnabled public Id cartId;
+        @AuraEnabled public Boolean refreshRequired;
+    }
+
+    @AuraEnabled
+    public static CartResponse handleDistributorCart(String distribAction) {
+
+        CartResponse response = new CartResponse();
+        Id userId = UserInfo.getUserId();
+
+        // Query active cart for user
+        WebCart activeCart = [
+            SELECT Id, Name, Status, IsSecondary__c
+            FROM WebCart
+            WHERE OwnerId = :userId
+            AND Status = 'Active'
+            LIMIT 1
+        ];
+
+        // If no active cart → create new
+        if (activeCart == null) {
+            WebCart newCart = createCart(userId, distribAction);
+            response.cartId = newCart.Id;
+            response.message = 'Refresh Cart';
+            response.refreshRequired = true;
+            return response;
+        }
+
+        // If cart name already contains action → no refresh
+        if (activeCart.Name != null &&
+            activeCart.Name.contains(distribAction)) {
+
+            response.cartId = activeCart.Id;
+            response.message = 'Do Not Refresh Cart';
+            response.refreshRequired = false;
+            return response;
+        }
+
+        // Mark current cart as secondary
+        activeCart.IsSecondary__c = true;
+        update activeCart;
+
+        // Check if secondary cart already exists for action
+        List<WebCart> existingCart = [
+            SELECT Id, Name, Status, IsSecondary__c
+            FROM WebCart
+            WHERE OwnerId = :userId
+            AND Name = :('Cart ' + distribAction)
+            LIMIT 1
+        ];
+
+        WebCart finalCart;
+
+        if (!existingCart.isEmpty()) {
+            finalCart = existingCart[0];
+            finalCart.IsSecondary__c = false;
+            finalCart.Status = 'Active';
+            update finalCart;
+        } else {
+            finalCart = createCart(userId, distribAction);
+        }
+
+        response.cartId = finalCart.Id;
+        response.message = 'Refresh Cart';
+        response.refreshRequired = true;
+
+        return response;
+    }
+
+
+    // Helper method to create cart
+    private static WebCart createCart(Id userId, String distribAction) {
+
+        WebCart cart = new WebCart();
+        cart.OwnerId = userId;
+        cart.Name = 'Cart ' + distribAction;
+        cart.Status = 'Active';
+        cart.IsSecondary__c = false;
+
+        insert cart;
+
+        return cart;
+    }
+}
