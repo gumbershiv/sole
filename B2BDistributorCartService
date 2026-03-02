@@ -1,89 +1,107 @@
 public without sharing class B2BDistributorCartService {
-    
-    @AuraEnabled(Cacheable=false)
+
+    @AuraEnabled(cacheable=false)
     public static B2BActionResponse handleDistributorCart(String communityId) {
-        
-        try{
-            Id userId = UserInfo.getUserId();
+
+        try {
+            Id userId     = UserInfo.getUserId();
             String persona = B2BUtil.getCurrentUserPersona();
-            Id acctId = B2BUtil.getEffectiveAccountId();
+            Id acctId     = B2BUtil.getEffectiveAccountId();
             Id webstoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);
-            if(persona == 'DIST_AS_CUSTOMER' || persona == 'DIST_DOUBLE_DISCOUNT'){
-                
-                // Query active cart for user
-                WebCart activeCart = [
-                    SELECT Id, Name, Status, IsSecondary
-                    FROM WebCart
-                    WHERE OwnerId = :userId
-                        AND WebStoreId = :webstoreId
-                        AND Status = 'Active'
-                        AND AccountId = :acctId
-                    LIMIT 1
-                ];
-                
-                // If no active cart - create new
-                if (activeCart == null) {
-                    WebCart newCart = createCart(userId, persona, acctId,webstoreId);
-                    return new B2BActionResponse(true,'Success',newCart);
-                }
-                
-                // If cart name already contains action - no refresh
-                if (activeCart.Name != null &&
-                    activeCart.Name.contains(persona)) {
-                        return new B2BActionResponse(false,'Do Not Refresh Cart',null);
-                    }
-                
-                // Mark current cart as secondary
-                activeCart.IsSecondary = true;
-                update activeCart;
-                
-                // Check if secondary cart already exists
-                List<WebCart> existingCart = [
-                    SELECT Id, Name, Status, IsSecondary
-                    FROM WebCart
-                    WHERE OwnerId = :userId
-                    	AND Name = :('Cart ' + persona)
-                    LIMIT 1
-                ];
-                
-                WebCart finalCart;
-                
-                if (!existingCart.isEmpty()) {
-                    finalCart = existingCart[0];
-                    finalCart.IsSecondary = false;
-                    finalCart.Status = 'Active';
-                    update finalCart;
-                } else {
-                    finalCart = createCart(userId, persona,acctId,webstoreId);
-                }
-                return new B2BActionResponse(true, 'Success', finalCart);
-            }else{
+
+            // Persona validation
+            if (persona != 'DIST_AS_CUSTOMER' && persona != 'DIST_DOUBLE_DISCOUNT') {
                 return new B2BActionResponse(false, 'Not in Scope', null);
             }
+
+            // Get all ACTIVE carts for user/account/store
+            List<WebCart> activeCarts = [
+                SELECT Id, Name, Status, IsSecondary
+                FROM WebCart
+                WHERE OwnerId = :userId
+                AND AccountId = :acctId
+                AND WebStoreId = :webstoreId
+                AND Status = 'Active'
+            ];
+
+            WebCart primaryCart;
+            WebCart personaCart;
+
+            // Identify carts
+            for (WebCart cart : activeCarts) {
+                if (!cart.IsSecondary) {
+                    primaryCart = cart;
+                }
+                if (cart.Name != null && cart.Name == ('Cart ' + persona)) {
+                    personaCart = cart;
+                }
+            }
+
+            // ✅ Case 1: Persona cart already primary → no refresh
+            if (personaCart != null && !personaCart.IsSecondary) {
+                return new B2BActionResponse(false, 'Do Not Refresh Cart', personaCart);
+            }
+
+            List<WebCart> cartsToUpdate = new List<WebCart>();
+
+            // ✅ Case 2: Persona cart exists but secondary → promote it
+            if (personaCart != null) {
+
+                if (primaryCart != null) {
+                    primaryCart.IsSecondary = true;
+                    cartsToUpdate.add(primaryCart);
+                }
+
+                personaCart.IsSecondary = false;
+                cartsToUpdate.add(personaCart);
+
+                update cartsToUpdate;
+
+                return new B2BActionResponse(true, 'Switched To Existing Persona Cart', personaCart);
+            }
+
+            // ✅ Case 3: Persona cart does not exist → create new primary
+
+            if (primaryCart != null) {
+                primaryCart.IsSecondary = true;
+                update primaryCart;
+            }
+
+            WebCart newCart = createCart(userId, persona, acctId, webstoreId);
+
+            return new B2BActionResponse(true, 'Created New Persona Cart', newCart);
+
         } catch (Exception ex) {
-            B2BLoggingUtil.error('ORDER_DETAIL_LOGGERERR', 'B2BDistributorCartService', 'handleDistributorCart', ex.getLineNumber(), ex.getMessage(), null);
+
+            B2BLoggingUtil.error(
+                'ORDER_DETAIL_LOGGERERR',
+                'B2BDistributorCartService',
+                'handleDistributorCart',
+                ex.getLineNumber(),
+                ex.getMessage(),
+                null
+            );
+
             return new B2BActionResponse(false, ex.getMessage(), null);
+
         } finally {
             B2BLoggingUtil.flush();
         }
-        
     }
-    
-    private static WebCart createCart(Id userId, String distribAction, Id acctId, Id webstoreId) {
-        
+
+
+    private static WebCart createCart(Id userId, String persona, Id acctId, Id webstoreId) {
+
         WebCart cart = new WebCart();
         cart.OwnerId = userId;
-        cart.Name = 'Cart ' + distribAction;
+        cart.Name = 'Cart ' + persona;
         cart.Status = 'Active';
-        cart.IsSecondary = false;
+        cart.IsSecondary = false; // Always primary when created
         cart.AccountId = acctId;
         cart.WebStoreId = webstoreId;
         cart.B2B_CartType__c = 'Cart';
-        cart.Status = 'Active';
-        
+
         insert cart;
-        
         return cart;
     }
-    
 }
