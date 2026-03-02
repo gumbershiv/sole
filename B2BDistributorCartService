@@ -1,0 +1,89 @@
+public without sharing class B2BDistributorCartService {
+    
+    @AuraEnabled(Cacheable=false)
+    public static B2BActionResponse handleDistributorCart(String communityId) {
+        
+        try{
+            Id userId = UserInfo.getUserId();
+            String persona = B2BUtil.getCurrentUserPersona();
+            Id acctId = B2BUtil.getEffectiveAccountId();
+            Id webstoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);
+            if(persona == 'DIST_AS_CUSTOMER' || persona == 'DIST_DOUBLE_DISCOUNT'){
+                
+                // Query active cart for user
+                WebCart activeCart = [
+                    SELECT Id, Name, Status, IsSecondary
+                    FROM WebCart
+                    WHERE OwnerId = :userId
+                        AND WebStoreId = :webstoreId
+                        AND Status = 'Active'
+                        AND AccountId = :acctId
+                    LIMIT 1
+                ];
+                
+                // If no active cart - create new
+                if (activeCart == null) {
+                    WebCart newCart = createCart(userId, persona, acctId,webstoreId);
+                    return new B2BActionResponse(true,'Success',newCart);
+                }
+                
+                // If cart name already contains action - no refresh
+                if (activeCart.Name != null &&
+                    activeCart.Name.contains(persona)) {
+                        return new B2BActionResponse(false,'Do Not Refresh Cart',null);
+                    }
+                
+                // Mark current cart as secondary
+                activeCart.IsSecondary = true;
+                update activeCart;
+                
+                // Check if secondary cart already exists
+                List<WebCart> existingCart = [
+                    SELECT Id, Name, Status, IsSecondary
+                    FROM WebCart
+                    WHERE OwnerId = :userId
+                    	AND Name = :('Cart ' + persona)
+                    LIMIT 1
+                ];
+                
+                WebCart finalCart;
+                
+                if (!existingCart.isEmpty()) {
+                    finalCart = existingCart[0];
+                    finalCart.IsSecondary = false;
+                    finalCart.Status = 'Active';
+                    update finalCart;
+                } else {
+                    finalCart = createCart(userId, persona,acctId,webstoreId);
+                }
+                return new B2BActionResponse(true, 'Success', finalCart);
+            }else{
+                return new B2BActionResponse(false, 'Not in Scope', null);
+            }
+        } catch (Exception ex) {
+            B2BLoggingUtil.error('ORDER_DETAIL_LOGGERERR', 'B2BDistributorCartService', 'handleDistributorCart', ex.getLineNumber(), ex.getMessage(), null);
+            return new B2BActionResponse(false, ex.getMessage(), null);
+        } finally {
+            B2BLoggingUtil.flush();
+        }
+        
+    }
+    
+    private static WebCart createCart(Id userId, String distribAction, Id acctId, Id webstoreId) {
+        
+        WebCart cart = new WebCart();
+        cart.OwnerId = userId;
+        cart.Name = 'Cart ' + distribAction;
+        cart.Status = 'Active';
+        cart.IsSecondary = false;
+        cart.AccountId = acctId;
+        cart.WebStoreId = webstoreId;
+        cart.B2B_CartType__c = 'Cart';
+        cart.Status = 'Active';
+        
+        insert cart;
+        
+        return cart;
+    }
+    
+}
