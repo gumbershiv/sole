@@ -1,47 +1,55 @@
 @IsTest
 public with sharing class B2BDistributorCartServiceTest {
-    
-    // Centralized data creation requested via @TestSetup
+
+    /* =========================
+       TEST SETUP
+       ========================= */
     @TestSetup
     static void testSetup() {
-        // Account, Contact, User
+
         Account acct = B2B_TestDataFactory.createAccount(false);
         acct.Name = 'Dist Test Account';
         insert acct;
-        
+
         Contact c = B2B_TestDataFactory.createContact(acct);
         User u = B2B_TestDataFactory.createCommunityUser(c, 'dist.user@example.com');
-        
-        // WebStore + Network and buyer access scaffolding (consistent with other tests)
+
         WebStore store = B2B_TestDataFactory.createWebStore();
-        Network net = B2B_TestDataFactory.getNetwork();
-        BuyerGroup buyerGroup = B2B_TestDataFactory.createBuyerGroup();
-        BuyerAccount buyerAcct = B2B_TestDataFactory.createBuyerAccount(acct);
-        BuyerGroupMember member = B2B_TestDataFactory.createBuyerGroupMember(acct, buyerGroup);
-        WebStoreBuyerGroup wbg = B2B_TestDataFactory.createWebStoreBuyerGroup(buyerGroup, store.Id);
-        
-        // Seed session info so B2BUtil.getSessionInformation is established for this user
+        B2B_TestDataFactory.getNetwork();
+        BuyerGroup bg = B2B_TestDataFactory.createBuyerGroup();
+        B2B_TestDataFactory.createBuyerAccount(acct);
+        B2B_TestDataFactory.createBuyerGroupMember(acct, bg);
+        B2B_TestDataFactory.createWebStoreBuyerGroup(bg, store.Id);
+
         System.runAs(u) {
-            B2BUtil.updateSessionTrackerRealTime = false; // avoid upsert in setup noise
+            B2BUtil.updateSessionTrackerRealTime = false;
             B2BUtil.saveSessionInfoToPlatformSessionCache(acct.Id, false);
         }
     }
-    
-    private static TestData initialDataLoad() {
+
+    /* =========================
+       COMMON HELPERS
+       ========================= */
+
+    private static TestData loadData() {
         TestData t = new TestData();
         t.acct = [SELECT Id FROM Account WHERE Name = 'Dist Test Account' LIMIT 1];
         t.user = [SELECT Id FROM User WHERE Username = 'dist.user@example.com' LIMIT 1];
-        t.store = [SELECT Id FROM WebStore WHERE Name = 'Shop Solar' LIMIT 1];
+        t.store = [SELECT Id FROM WebStore LIMIT 1];
         t.network = B2B_TestDataFactory.getNetwork();
         return t;
     }
 
-    // Helper to configure persona in session
-    private static void setPersonaSession(User u, Id effectiveAccountId, B2BUtil.DistributorAction action, Boolean isDistributor) {
+    private static void setPersona(
+        User u,
+        Id acctId,
+        B2BUtil.DistributorAction action,
+        Boolean isDistributor
+    ) {
         System.runAs(u) {
             B2BUtil.updateSessionTrackerRealTime = false;
             B2BUtil.saveSessionInfoToPlatformSessionCache(
-                (String)effectiveAccountId,
+                (String)acctId,
                 isDistributor,
                 action == null ? null : action.toString(),
                 null,
@@ -52,185 +60,186 @@ public with sharing class B2BDistributorCartServiceTest {
         }
     }
 
-    // Helper to insert a cart for a user/account/store
-    private static Id makeCart(User u, WebStore store, Account acct, String name, Boolean isSecondary) {
-        Id newCartId;
+    private static Id createCart(
+        User u,
+        Id storeId,
+        Id acctId,
+        String name,
+        Boolean isSecondary
+    ) {
+        Id cartId;
         System.runAs(u) {
             WebCart wc = new WebCart(
                 Name = name,
-                WebStoreId = store.Id,
-                AccountId = acct.Id,
+                WebStoreId = storeId,
+                AccountId = acctId,
                 IsSecondary = isSecondary,
                 Status = 'Active'
             );
             insert wc;
-            newCartId = wc.Id;
+            cartId = wc.Id;
         }
-        return newCartId;
+        return cartId;
     }
 
-    @IsTest
-    static void testPersonaNotInScope_returnsNotInScope() {
-         TestData t = initialDataLoad();
+    /* =========================
+       TEST CASES
+       ========================= */
 
-        // Persona: ACTIVE_USER (non-distributor) - not in scope
-        setPersonaSession(t.user, t.acct.Id, null, false);
+    @IsTest
+    static void test_NotInScope() {
+
+        TestData t = loadData();
+        setPersona(t.user, t.acct.Id, null, false);
 
         B2BActionResponse resp;
+
         Test.startTest();
         System.runAs(t.user) {
             resp = B2BDistributorCartService.handleDistributorCart(t.network.Id);
         }
         Test.stopTest();
 
-        System.assertEquals(false, resp.isSuccess);
-        System.assertEquals('Not in Scope', resp.message);
-        System.assertEquals(null, resp.data);
+        Assert.isFalse(resp.isSuccess);
+        Assert.areEqual('Not in Scope', resp.message);
+        Assert.isNull(resp.data);
     }
-    
+
     @IsTest
-    static void testPersonaCartAlreadyPrimary_doNotRefresh() {
-        TestData t = initialDataLoad();
+    static void test_PersonaAlreadyPrimary_NoRefresh() {
 
-        // Persona in scope: DIST_AS_CUSTOMER
-        setPersonaSession(t.user, t.acct.Id, B2BUtil.DistributorAction.AS_CUSTOMER, true);
+        TestData t = loadData();
 
-        // Create persona primary cart and a secondary cart
-        System.runAs(t.user) {
-            insert new WebCart(
-                Name = 'Cart ' + B2BUtil.B2BPersona.DIST_AS_CUSTOMER.toString(),
-                WebStoreId = t.store.Id,
-                AccountId = t.acct.Id,
-                IsSecondary = false,
-                Status = 'Active'
-            );
-            insert new WebCart(
-                Name = 'Misc',
-                WebStoreId = t.store.Id,
-                AccountId = t.acct.Id,
-                IsSecondary = true,
-                Status = 'Active'
-            );
-        }
-
-        B2BActionResponse resp;
-        Test.startTest();
-        System.runAs(t.user) {
-            resp = B2BDistributorCartService.handleDistributorCart(t.network.Id);
-        }
-        Test.stopTest();
-
-        //System.assertEquals(false, resp.isSuccess);
-        //System.assertEquals('Do Not Refresh Cart', resp.message);
-        //System.assertNotEquals(null, resp.data);
-        //WebCart returned = [SELECT Id, Name, IsSecondary FROM WebCart WHERE Id = :((Id)resp.data)];
-        //System.assertEquals(false, returned.IsSecondary);
-        //System.assertEquals('Cart ' + B2BUtil.B2BPersona.DIST_AS_CUSTOMER.toString(), returned.Name);
-    }
-
-    /*@IsTest
-    static void testPersonaCartSecondary_withExistingPrimary_swapsAndRefresh() {
-        TestData t = loadCtx();
-
-        // Persona in scope: DIST_AS_CUSTOMER
-        setPersonaSession(t.user, t.acct.Id, B2BUtil.DistributorAction.AS_CUSTOMER, true);
-
-        Id primaryId = makeCart(t.user, t.store, t.acct, 'PrimaryBefore', false);
-        Id personaSecondaryId = makeCart(
-            t.user, t.store, t.acct,
-            'Cart ' + B2BUtil.B2BPersona.DIST_AS_CUSTOMER.toString(),
+        setPersona(
+            t.user,
+            t.acct.Id,
+            B2BUtil.DistributorAction.AS_CUSTOMER,
             true
         );
 
+        String expectedName =
+            'Cart ' + B2BUtil.B2BPersona.DIST_AS_CUSTOMER;
+
+        createCart(t.user, t.store.Id, t.acct.Id, expectedName, false);
+        createCart(t.user, t.store.Id, t.acct.Id, 'Misc', true);
+
         B2BActionResponse resp;
+
         Test.startTest();
         System.runAs(t.user) {
             resp = B2BDistributorCartService.handleDistributorCart(t.network.Id);
         }
         Test.stopTest();
 
-        System.assertEquals(true, resp.isSuccess);
-        System.assertEquals('Refresh Cart', resp.message);
-        Id personaId = (Id) resp.data;
+        Assert.isTrue(resp.isSuccess);
+        Assert.areEqual('Do Not Refresh Cart', resp.message);
+
+        WebCart wc = [
+            SELECT Id, IsSecondary, Name
+            FROM WebCart
+            WHERE Id = :((Id)resp.data)
+        ];
+
+        Assert.isFalse(wc.IsSecondary);
+        Assert.areEqual(expectedName, wc.Name);
+    }
+
+    @IsTest
+    static void test_CreatePersonaCart_DemoteOldPrimary() {
+
+        TestData t = loadData();
+
+        setPersona(
+            t.user,
+            t.acct.Id,
+            B2BUtil.DistributorAction.DOUBLE_DISCOUNT,
+            true
+        );
+
+        Id oldPrimary =
+            createCart(t.user, t.store.Id, t.acct.Id, 'Old Primary', false);
+
+        B2BActionResponse resp;
+
+        Test.startTest();
+        System.runAs(t.user) {
+            resp = B2BDistributorCartService.handleDistributorCart(t.network.Id);
+        }
+        Test.stopTest();
+
+        Assert.isTrue(resp.isSuccess);
+        Assert.areEqual('Refresh Cart', resp.message);
+
+        Id newId = (Id)resp.data;
 
         Map<Id, WebCart> carts = new Map<Id, WebCart>([
             SELECT Id, Name, IsSecondary, Status
             FROM WebCart
-            WHERE Id IN :new List<Id>{ primaryId, personaSecondaryId, personaId }
+            WHERE Id IN :new List<Id>{ oldPrimary, newId }
         ]);
 
-        //System.assertEquals(true, carts.get(primaryId).IsSecondary, 'Old primary must be demoted');
-        //System.assertEquals(false, carts.get(personaSecondaryId).IsSecondary, 'Persona cart must be promoted');
-        //System.assertEquals(personaSecondaryId, personaId, 'Response should return persona cart Id');
-    }*/
-    
-    @IsTest
-    static void testPersonaCartMissing_withExistingPrimary_createsNewAndDemotesOld() {
-        TestData t = initialDataLoad();
-
-        // Persona in scope: DIST_DOUBLE_DISCOUNT
-        setPersonaSession(t.user, t.acct.Id, B2BUtil.DistributorAction.DOUBLE_DISCOUNT, true);
-
-        Id oldPrimary = makeCart(t.user, t.store, t.acct, 'Some Primary', false);
-
-        B2BActionResponse resp;
-        Test.startTest();
-        System.runAs(t.user) {
-            resp = B2BDistributorCartService.handleDistributorCart(t.network.Id);
-        }
-        Test.stopTest();
-
-        System.assertEquals(true, resp.isSuccess);
-        System.assertEquals('Refresh Cart', resp.message);
-        Id createdPersonaId = (Id) resp.data;
-
-        WebCart oldP = [SELECT Id, IsSecondary, Status FROM WebCart WHERE Id = :oldPrimary];
-        WebCart newP = [SELECT Id, Name, IsSecondary, Status FROM WebCart WHERE Id = :createdPersonaId];
-
-        //System.assertEquals(true, oldP.IsSecondary);
-        //System.assertEquals(false, newP.IsSecondary);
-        //System.assertEquals('Cart ' + B2BUtil.B2BPersona.DIST_DOUBLE_DISCOUNT.toString(), newP.Name);
-        //System.assertEquals('Active', newP.Status);
+        Assert.isTrue(carts.get(oldPrimary).IsSecondary);
+        Assert.isFalse(carts.get(newId).IsSecondary);
+        Assert.areEqual(
+            'Cart ' + B2BUtil.B2BPersona.DIST_DOUBLE_DISCOUNT,
+            carts.get(newId).Name
+        );
+        Assert.areEqual('Active', carts.get(newId).Status);
     }
 
     @IsTest
-    static void testPersonaCartMissing_noExistingPrimary_createsNewPrimary() {
-        TestData t = initialDataLoad();
+    static void test_CreatePrimary_WhenNoCartExists() {
 
-        // Persona in scope: DIST_AS_CUSTOMER
-        setPersonaSession(t.user, t.acct.Id, B2BUtil.DistributorAction.AS_CUSTOMER, true);
+        TestData t = loadData();
 
-        // Ensure no carts exist initially for this user/account/store
+        setPersona(
+            t.user,
+            t.acct.Id,
+            B2BUtil.DistributorAction.AS_CUSTOMER,
+            true
+        );
+
         System.runAs(t.user) {
-            List<WebCart> toDelete = [
-                SELECT Id FROM WebCart
-                WHERE AccountId = :t.acct.Id AND WebStoreId = :t.store.Id
+            delete [
+                SELECT Id
+                FROM WebCart
+                WHERE AccountId = :t.acct.Id
+                AND WebStoreId = :t.store.Id
             ];
-            if (!toDelete.isEmpty()) delete toDelete;
         }
 
         B2BActionResponse resp;
+
         Test.startTest();
         System.runAs(t.user) {
             resp = B2BDistributorCartService.handleDistributorCart(t.network.Id);
         }
         Test.stopTest();
 
-        System.assertEquals(true, resp.isSuccess);
-        System.assertEquals('Refresh Cart', resp.message);
-        Id newId = (Id) resp.data;
+        Assert.isTrue(resp.isSuccess);
+        Assert.areEqual('Refresh Cart', resp.message);
 
-        WebCart created = [SELECT Id, Name, IsSecondary, Status FROM WebCart WHERE Id = :newId];
-        //System.assertEquals('Cart ' + B2BUtil.B2BPersona.DIST_AS_CUSTOMER.toString(), created.Name);
-        //System.assertEquals(false, created.IsSecondary);
-        //System.assertEquals('Active', created.Status);
+        WebCart wc = [
+            SELECT Name, IsSecondary, Status
+            FROM WebCart
+            WHERE Id = :((Id)resp.data)
+        ];
+
+        Assert.areEqual(
+            'Cart ' + B2BUtil.B2BPersona.DIST_AS_CUSTOMER,
+            wc.Name
+        );
+        Assert.isFalse(wc.IsSecondary);
+        Assert.areEqual('Active', wc.Status);
     }
-    
-    private class TestData{
+
+    /* =========================
+       WRAPPER
+       ========================= */
+    private class TestData {
         Account acct;
         User user;
         WebStore store;
         Network network;
     }
-
 }
