@@ -1,5 +1,21 @@
+/**
+ * @description Apex class to handle cart switching logic for B2B Distributor users based on their persona.
+ * 
+ * Modification Log:
+ * ==============================================================================
+ * Ver      | Date          | Author            | Modification
+ *==============================================================================
+ * 1.0      | 03-Mar-2026   | Shivam Gumber      | Initial update
+ */
 public without sharing class B2BDistributorCartService {
     
+    /**
+     * @description Handles cart switching for distributor users based on their persona. 
+     * If a cart matching the user's persona exists, it will be set as primary. 
+     * If not, a new cart will be created.
+     * @param {String} communityId - The ID of the community to resolve the webstore context.
+     * @return {B2BActionResponse} - Response indicating whether the cart was switched/created.
+     */
     @AuraEnabled(cacheable=false)
     public static B2BActionResponse handleDistributorCart(String communityId) {
         
@@ -11,7 +27,7 @@ public without sharing class B2BDistributorCartService {
             
             // Persona validation
             if (persona != 'DIST_AS_CUSTOMER' && persona != 'DIST_DOUBLE_DISCOUNT') {
-                return new B2BActionResponse(false, 'Not in Scope', null);
+                return new B2BActionResponse(true, 'Do Not Refresh Cart', null);
             }
             
             // Get all ACTIVE carts
@@ -22,6 +38,7 @@ public without sharing class B2BDistributorCartService {
                     AND AccountId = :acctId
                     AND WebStoreId = :webstoreId
                     AND Status = 'Active'
+                    AND B2B_CartType__c != 'Quote'
             ];
             
             WebCart primaryCart;
@@ -39,7 +56,7 @@ public without sharing class B2BDistributorCartService {
             
             // Persona cart already primary - no refresh
             if (personaCart != null && !personaCart.IsSecondary) {
-                return new B2BActionResponse(false, 'Do Not Refresh Cart', personaCart);
+                return new B2BActionResponse(true, 'Do Not Refresh Cart', personaCart);
             }
             
             List<WebCart> cartsToUpdate = new List<WebCart>();
@@ -51,7 +68,7 @@ public without sharing class B2BDistributorCartService {
                     primaryCart.IsSecondary = true;
                     cartsToUpdate.add(primaryCart);
                 }
-                
+
                 personaCart.IsSecondary = false;
                 cartsToUpdate.add(personaCart);
                 
@@ -60,21 +77,19 @@ public without sharing class B2BDistributorCartService {
                 return new B2BActionResponse(true, 'Refresh Cart', personaCart);
             }
             
-            // Persona cart does not exist - create new primary
-            
+            // Persona cart does not exist - create new primary cart
             if (primaryCart != null) {
                 primaryCart.IsSecondary = true;
                 update primaryCart;
             }
             
             Id newCart = createCart(userId, persona, acctId, webstoreId);
-            
             return new B2BActionResponse(true, 'Refresh Cart', newCart);
             
         } catch (Exception ex) {
             
             B2BLoggingUtil.error(
-                'ORDER_DETAIL_LOGGERERR',
+                'B2B_Distributor_Cart_Switch_ERR',
                 'B2BDistributorCartService',
                 'handleDistributorCart',
                 ex.getLineNumber(),
@@ -89,7 +104,14 @@ public without sharing class B2BDistributorCartService {
         }
     }
     
-    
+    /**
+     * @description Helper method to create a new cart for the user with the given persona.
+     * @param userId - Id of the user for whom to create the cart
+     * @param persona - Persona to use in cart name
+     * @param acctId - Account Id to associate with the cart
+     * @param webstoreId - Webstore Id to associate with the cart
+     * @return Id of the created cart
+     */
     private static Id createCart(Id userId, String persona, Id acctId, Id webstoreId) {
         
         ConnectApi.CartInput cartInput = new ConnectApi.CartInput();
@@ -98,9 +120,12 @@ public without sharing class B2BDistributorCartService {
         cartInput.name = 'Cart ' + persona;
         cartInput.type = ConnectApi.CartType.CART;
         ConnectApi.CartSummary cartSumm;
+
         if(test.isRunningTest()){
+            // Create a test cart for the user for test scenarios since ConnectApi does not work in test context
             cartSumm = B2BCartSwitcherServiceTest.makeTestCommerceCartSummary(webstoreId,acctId,userId);
         }else{
+            // create cart via ConnectApi
             cartSumm = ConnectApi.CommerceCart.createCart(webstoreId, cartInput);
         }
         return cartSumm.cartId;
