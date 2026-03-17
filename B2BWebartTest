@@ -1,0 +1,170 @@
+@IsTest
+public with sharing class B2BWebCartTriggerTest {
+    
+    /**
+     * @description setup data for tests
+     * @return void
+     */
+    @TestSetup
+    static void setup() {
+
+        Account acct = B2B_TestDataFactory.createAccount(false);
+        acct.Name = 'Dist Test Account';
+        insert acct;
+
+        Contact c = B2B_TestDataFactory.createContact(acct);
+        User u = B2B_TestDataFactory.createCommunityUser(c, 'dist.user@example.com');
+
+        WebStore store = B2B_TestDataFactory.createWebStore();
+        B2B_TestDataFactory.getNetwork();
+        BuyerGroup bg = B2B_TestDataFactory.createBuyerGroup();
+        B2B_TestDataFactory.createBuyerAccount(acct);
+        B2B_TestDataFactory.createBuyerGroupMember(acct, bg);
+        B2B_TestDataFactory.createWebStoreBuyerGroup(bg, store.Id);
+
+        System.runAs(u) {
+            B2BUtil.updateSessionTrackerRealTime = false;
+            B2BUtil.saveSessionInfoToPlatformSessionCache(acct.Id, false);
+        }
+    }
+
+    /**
+     * @description helper method to load common test data
+     * @return TestData wrapper class instance
+     */
+    private static TestData loadData() {
+        TestData t = new TestData();
+        t.acct = [SELECT Id FROM Account WHERE Name='Dist Test Account' LIMIT 1];
+        t.user = [SELECT Id FROM User WHERE Username='dist.user@example.com' LIMIT 1];
+        t.store = [SELECT Id FROM WebStore LIMIT 1];
+        t.network = B2B_TestDataFactory.getNetwork();
+        return t;
+    }
+
+    /**
+     * @description helper method to set user persona in session cache
+     * @param u - user for whom to set persona
+     * @param acctId - account id for session info
+     * @param action - distributor action to set for persona
+     * @param isDistributor - whether to set persona as distributor or not
+     * @return void
+     */
+    private static void setPersona(User u, Id acctId,
+        B2BUtil.DistributorAction action,
+        Boolean isDistributor) {
+
+        System.runAs(u) {
+            B2BUtil.updateSessionTrackerRealTime = false;
+            B2BUtil.saveSessionInfoToPlatformSessionCache(
+                (String)acctId,
+                isDistributor,
+                action == null ? null : action.toString(),
+                null,
+                false,
+                null,
+                u.Id
+            );
+        }
+    }
+
+    /**
+     * @description helper method to create cart with given params
+     * @param u - user for whom to create cart
+     * @param storeId - webstore for cart
+     * @param acctId - account for cart
+     * @param name - name for cart (useful to identify persona cart)
+     * @param isSecondary - whether cart should be created as secondary or not
+     * @return Id of created cart
+     */
+    private static Id createCart(
+        User u, Id storeId, Id acctId,String name, Boolean isSecondary
+        ) {
+
+        Id cartId;
+        System.runAs(u) {
+            WebCart wc = new WebCart(
+                Name = name,
+                WebStoreId = storeId,
+                AccountId = acctId,
+                IsSecondary = isSecondary,
+                Status = 'Active'
+            );
+            insert wc;
+            cartId = wc.Id;
+        }
+        return cartId;
+    }
+    
+    @IsTest
+    static void testCartNameUpdatedSuccessfully() {
+
+        TestData t = loadData();        
+        setPersona(t.user, t.acct.Id,B2BUtil.DistributorAction.AS_CUSTOMER, true);
+        System.runAs(t.user) {
+            WebCart wc = new WebCart(
+                Name = 'Cart',
+                WebStoreId = t.store.Id,
+                AccountId = t.acct.Id
+            );
+            Test.startTest();
+            insert wc; // trigger runs but should exit before calling handler
+            Test.stopTest();
+            
+            WebCart after = [SELECT Id, Name FROM WebCart WHERE Id = :wc.Id];
+            system.debug('after'+after);
+            Assert.areEqual('Cart DIST_AS_CUSTOMER', after.Name, 'When profile is Buyer, handler must change the name.');
+        }
+    }
+    
+    @IsTest
+    static void testCartNameNotUpdated() {
+
+        TestData t = loadData();        
+        setPersona(t.user, t.acct.Id,B2BUtil.DistributorAction.FOR_SELF, true);
+        System.runAs(t.user) {
+            WebCart wc = new WebCart(
+                Name = 'Cart',
+                WebStoreId = t.store.Id,
+                AccountId = t.acct.Id
+            );
+            Test.startTest();
+            insert wc; // trigger runs but should exit before calling handler
+            Test.stopTest();
+            
+            WebCart after = [SELECT Id, Name FROM WebCart WHERE Id = :wc.Id];
+            system.debug('after'+after);
+            Assert.areEqual('Cart', after.Name, 'Persona is Dist_As_Self, Cart name will not be updated');
+        }
+    }
+    
+    @IsTest
+    static void testProfileMismatch() {
+
+        TestData t = loadData();        
+        User sys = B2B_TestDataFactory.createSysAdminUser();
+        System.runAs(sys) {
+            WebCart wc = new WebCart(
+                Name = 'Cart',
+                WebStoreId = t.store.Id,
+                AccountId = t.acct.Id
+            );
+            Test.startTest();
+            insert wc; // trigger runs but should exit before calling handler
+            Test.stopTest();
+            
+            WebCart after = [SELECT Id, Name FROM WebCart WHERE Id = :wc.Id];
+            Assert.areEqual('Cart', after.Name, 'When profile is not Buyer, handler must not change the name.');
+        }
+    }
+
+    /**
+     * @description wrapper class to hold common test data for ease of use across test methods
+     */
+    private class TestData {
+        Account acct;
+        User user;
+        WebStore store;
+        Network network;
+    }
+
+}
