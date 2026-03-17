@@ -1,1 +1,57 @@
 
+/**
+ * @trigger B2BWebCartTrigger on WebCart (before insert)
+ * @description This trigger is used to set the cart name based on user persona when a new WebCart is created.
+ * It fires before insert and calls the B2BWebCartHandler.setCartNameFromPersona method to update the cart name accordingly. 
+ * The cart name is set to "Cart " followed by the persona value for specific personas (DIST_AS_CUSTOMER and DIST_DOUBLE_DISCOUNT). 
+ * If the persona is not set or does not match the specified values, the cart name will not be updated.
+ */
+trigger B2BWebCartTrigger on WebCart (before insert) {
+
+    // Set cart name based on user persona
+    B2BWebCartHandler.setCartNameFromPersona(Trigger.New);
+
+}
+
+/**
+ * @description This class handles the logic for setting the cart name based on the user's persona when a new WebCart is created.
+ *             It checks the user's profile and persona, and if they match certain criteria, it updates the cart name accordingly.
+ * 
+ * @mods:
+ * multiple           17-Mar-2025     created
+ */
+public with sharing class B2BWebCartHandler {
+
+    /**
+     * @description This method is called from the before insert trigger on WebCart. 
+     * It checks the user's profile and persona, and if the user is a 'CloudCraze Customer Community Plus Login User' 
+     * and has a persona of 'DIST_AS_CUSTOMER' or 'DIST_DOUBLE_DISCOUNT', 
+     * it sets the cart name to "Cart " + persona if the name is blank or does not already contain the persona.
+     * @param carts List<WebCart> - the list of WebCart records being inserted
+     * @return void
+     */
+    public static void setCartNameFromPersona(List<WebCart> carts){
+
+        // if profile is not 'CloudCraze Customer Community Plus Login User', do nothing
+        String profile = [SELECT Id, Profile.Name from User WHERE Id =: userInfo.getUserId()].Profile.Name;
+        if(profile != 'CloudCraze Customer Community Plus Login User'){
+            return;
+        }
+
+        // fetch persona to determine if we should set cart name, and what to set it to. 
+        String persona = B2BUtil.getCurrentUserPersona();
+
+        // If persona is blank or not one of the expected values,  do nothing
+        if(String.isBlank(persona) || persona != 'DIST_AS_CUSTOMER' && persona != 'DIST_DOUBLE_DISCOUNT'){
+            return;
+        }
+        
+        // If persona is valid, set cart name to "Cart " + persona if name is blank or does not already contain the persona.
+        String updatedName = 'Cart ' + persona;
+        for(WebCart cart : carts){
+            if(String.isBlank(cart.Name) || !cart.Name.contains(persona)){
+                cart.Name = updatedName;
+            }
+        }
+    }
+}
