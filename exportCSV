@@ -1,0 +1,299 @@
+/**
+ * @description - This class is used to download product collection as CSV file.
+ *
+ * Modification History:
+ * 
+ * Date:            Modified By             Description
+ * **********************************************************
+ * 25-Mar-2025      Karunya Ette            created
+ * 26-Feb-2026      Ekanth Hanchate         PBI-868800:CSV export of Limited Stock status
+ * 
+ **/
+public without sharing class B2BProductCollectionCSVController {
+    
+    public static final String CLASS_NAME = 'B2BProductCollectionCSVController';
+    public static final String NA = 'NA';
+    public static final String CONTACT_SOA = 'Contact SOA';
+    public static final String REPLACED = 'Replaced';
+    public static final String IN_STOCK = 'In Stock';
+    public static final String OUT_OF_STOCK = 'Out of Stock';
+    public static final String ITEM_UNAVAILABLE = 'Item Unavailable';
+    private static final String LOGGER_SETTINGS_ERR = 'ProductCollectionCSV_ERR';  //Create a B2B Logging Setting for custom log levels
+    public static final String LIMITED_STOCK = 'Limited Stock';
+    public static final String LIMITED_STOCK_REPLACEMENT = 'Limited Stock with Replacement';
+
+   
+    /**
+     * @description - Retrieves the list clicked a user to download as PDF.
+     * @param communityId - The ID of the community.
+     * @param productCollectionId - The ID of the product collection.
+     * @param accountId - The ID of the account.
+     * @param List<B2BProductCollectionController.ArrayPositions> modifiedArrayItems - array of listItemsId and position information
+     * @param hasArrayChanged - Boolean flag - indicates whether quantity or list items positioning is changed
+     * @return B2BActionResponse - contains list information that needs to be downloaded
+     */
+    @AuraEnabled(cacheable=false)
+    public static B2BActionResponse getExportListData(
+        String communityId,
+        String productCollectionId,
+        String accountId,
+        List<B2BProductCollectionController.ArrayPositions> modifiedArrayItems,
+        Boolean hasArrayChanged) { 
+        //local variables
+        B2BActionResponse actionResponse;  
+        final String METHOD_NAME = 'getExportListData';
+        Map<String, String> pageLabelsMap = new Map<String, String>();
+        List<ExportListWrapper> exportWrapper = new List<ExportListWrapper>();
+
+        //fetching purchase limit from store setting mdt
+        B2B_StoreSetting__mdt storesettings = B2B_StoreSetting__mdt.getInstance('ShopSolar');
+        Decimal purchaseLimitmtd = storesettings.B2B_purchaseLimit__c;
+        
+        try{
+            //update the resequencing or quantity of the list
+            if(modifiedArrayItems!=null && !modifiedArrayItems.isEmpty() && hasArrayChanged){
+                B2BActionResponse seqUpdate = B2BProductCollectionController.updateListSequence(modifiedArrayItems);
+            }
+            String webStoreId = B2BUtil.resolveCommunityIdToWebstoreId(communityId);  
+            
+            if(String.isBlank(accountId)){
+                accountId = B2BUtil.getEffectiveAccountId();
+            }
+
+            Account accdata = [
+                SELECT Id,cc_ST_B2B_CurrencyIsoCode__c, ST_Business_Partner_Code__c
+                FROM Account
+                WHERE Id = :accountId
+                LIMIT 1
+            ];
+            if (String.isBlank(accdata.cc_ST_B2B_CurrencyIsoCode__c)) {
+                accdata.cc_ST_B2B_CurrencyIsoCode__c = 'USD';
+            }
+
+            List<ProductCollection__c> prodCollections = B2BProductCollectionShareController.queryProductCollectionsWithProductInfo(productCollectionId);
+
+            if(prodCollections.isEmpty()){
+                actionResponse = new B2BActionResponse(true, 'NOITEMS', exportWrapper);
+            }
+            List<ProductCollectionLineItem__c> lineItems = prodCollections.get(0).ProductCollectionLineItems__r;
+
+            // stores products list and Map product skus with quantity 
+            List<String> productsFromList = new List<String>();
+            Map<Id,Decimal> validProductIdsQtyMap = new Map<Id,Decimal>();
+                    
+            for (ProductCollectionLineItem__c collectionItem : lineItems) {
+                productsFromList.add(collectionItem.ProductSku__c);
+                // Add to valid map only if Product__c is not null
+                if (collectionItem.Product__c != null) {
+                    validProductIdsQtyMap.put(collectionItem.Product__c, collectionItem.Quantity__c);
+                }
+            }
+
+            //Inventory data from SKUS returned from product collection
+            List<B2B_ProductInventory__c> inventoryData = [
+                SELECT B2B_Product__r.StockKeepingUnit, 
+                    B2B_Status__c,
+                    B2B_AllowBackOrders__c,
+                    B2B_InventoryAvailableInSalesUOM__c,        
+                    B2B_Product__r.B2B_IsProductSellable__c 
+                FROM B2B_ProductInventory__c
+                WHERE B2B_Product__r.StockKeepingUnit IN :productsFromList
+                AND (B2B_AllowBackOrders__c = TRUE OR (B2B_AllowBackOrders__c = FALSE AND B2B_InventoryAvailableInSalesUOM__c > 0))  
+            ];
+
+            // Store inventory and purchase limit data in a map
+            Map<String, B2B_ProductInventory__c> inventoryMap = new Map<String, B2B_ProductInventory__c>();
+            Map<String, Decimal> productSkuToPurchaseLimitMap = new Map<String, Decimal>();
+            
+            for (B2B_ProductInventory__c inventory : inventoryData) {
+                inventoryMap.put(inventory.B2B_Product__r.StockKeepingUnit, inventory);
+                
+                // Calculate purchase limit based on inventory logic
+                Decimal purchaseLimit = 0;
+                if (inventory.B2B_Product__r.B2B_IsProductSellable__c) {
+                    if (inventory.B2B_AllowBackOrders__c) {
+                        purchaseLimit = purchaseLimitmtd;
+                    } else {
+                        purchaseLimit = inventory.B2B_InventoryAvailableInSalesUOM__c != null ? 
+                                       inventory.B2B_InventoryAvailableInSalesUOM__c : 0;
+                    }
+                } else {
+                    purchaseLimit = 0;
+                }
+                productSkuToPurchaseLimitMap.put(inventory.B2B_Product__r.StockKeepingUnit, purchaseLimit);
+            }
+
+            // Fetch pricing details
+            ConnectApi.PricingInput pricingInput = new ConnectApi.PricingInput();
+            pricingInput.pricingLineItems = new List<ConnectApi.PricingLineItemInput>();
+    
+            for (String productId : validProductIdsQtyMap.keySet()) {
+                ConnectApi.PricingLineItemInput lineItemInput = new ConnectApi.PricingLineItemInput();
+                lineItemInput.productId = productId;
+                pricingInput.pricingLineItems.add(lineItemInput);
+            }
+
+            ConnectApi.PricingResult pricingResult;
+            if (Test.isRunningTest()) {
+                pricingResult = B2BUtilProductTest.makeTestCommerceStorePricing();
+            } else {
+                pricingResult = ConnectApi.CommerceStorePricing.getProductPrices(webStoreId, accountId, pricingInput); 
+            }
+
+            //map for pricing 
+            Map<String, ConnectApi.PricingResultLineItem> pricingMap = new Map<String, ConnectApi.PricingResultLineItem>();
+            for (ConnectApi.PricingResultLineItem lineItem : pricingResult.pricingLineItemResults) {
+                pricingMap.put(lineItem.productId, lineItem);
+            }        
+
+
+            // Retrieve Page Labels for lead time        
+            List<PageLabel__c> pageLabels = [SELECT Name, Label__c FROM PageLabel__c WHERE Name IN ('LeadTimeValuePre', 'LeadTimeValuePost', 'LeadTimeValue')];
+        
+            for (PageLabel__c pl : pageLabels) {
+                pageLabelsMap.put(pl.Name, pl.Label__c );
+            }       
+            
+            String leadTimePrefix = pageLabelsMap.get('LeadTimeValuePre') != null ? pageLabelsMap.get('LeadTimeValuePre') : '';
+            String leadTimeSuffix = pageLabelsMap.get('LeadTimeValuePost') != null ? pageLabelsMap.get('LeadTimeValuePost') : '';
+            String leadTimeValue = pageLabelsMap.get('LeadTimeValue') != null ? pageLabelsMap.get('LeadTimeValue') : '';
+            
+            
+
+            Integer i=0; //setting flag to know position of products in the list
+            //populate wrapper with product and inventory data
+            for (ProductCollectionLineItem__c citem : lineItems){
+                system.debug('lineItems'+citem);
+                i=i+1;
+                B2B_ProductInventory__c inventory = inventoryMap.get(citem.ProductSKU__c);
+                ExportListWrapper wrapper = new ExportListWrapper();
+                wrapper.sequence = String.valueOf(i);
+                wrapper.productSku = citem.ProductSKU__c !=null ? citem.ProductSKU__c: citem.ProductNonSolar__c;
+                wrapper.productId = citem.Product__c;
+                wrapper.quantity = String.valueOf(validProductIdsQtyMap.get(citem.Product__c)); 
+                wrapper.qtyPerUnit = String.valueOf(citem.Product__r.B2B_PACK_QUANTITY__c);
+                wrapper.shortDesc = escapeFieldForCsv(citem.Product__r.Description);
+                wrapper.currencyIsoCode = accData.cc_ST_B2B_CurrencyIsoCode__c;
+                wrapper.infoCodeProd = citem.Product__r.B2B_Info_Code__c;
+                wrapper.uom = citem.Product__r.B2B_UNITS__c!=null ?citem.Product__r.B2B_UNITS__c:'';
+                wrapper.replacementProductId = citem.Product__r.B2B_Replaced_By__c;
+                wrapper.leadTime = citem.Product__r.B2B_LEAD_TIME__c!=null?citem.Product__r.B2B_LEAD_TIME__c:'';
+                wrapper.comments = citem.Notes__c!=null ? escapeFieldForCsv(citem.Notes__c):'';
+                
+                system.debug('replaced product'+citem.Product__r.B2B_Replaced_By__c);
+               
+                //prices 
+                if (wrapper.replacementProductId != null) {
+                    wrapper.unitPrice = NA;
+                    wrapper.totalPrice = NA;
+                } else if (wrapper.infoCodeProd != null) {
+                    wrapper.unitPrice = CONTACT_SOA;
+                    wrapper.totalPrice = CONTACT_SOA;
+                } else {
+                    if (citem.Product__c != null && pricingMap.containsKey(citem.Product__c) && pricingMap.get(citem.Product__c) != null) {
+                        wrapper.unitPrice = String.valueOf(pricingMap.get(citem.Product__c).unitPrice);
+                        wrapper.totalPrice = String.valueOf(Decimal.valueOf(pricingMap.get(citem.Product__c).unitPrice) * validProductIdsQtyMap.get(citem.Product__c)
+                        );
+                    } else {
+                        wrapper.unitPrice = '0';
+                        wrapper.totalPrice = '0';
+                    }
+                }
+                // First, determine if it's Limited Stock
+                Boolean isLimitedStock = false;
+                if (inventory != null && inventory.B2B_Status__c == IN_STOCK) {
+                    Decimal purchaseLimit = productSkuToPurchaseLimitMap.get(citem.ProductSKU__c);
+                    if (purchaseLimit != null && 
+                        inventory.B2B_InventoryAvailableInSalesUOM__c != null &&
+                        inventory.B2B_InventoryAvailableInSalesUOM__c == purchaseLimit &&
+                        purchaseLimit > 0 &&
+                        purchaseLimit != purchaseLimitmtd) { // Exclude backorder scenarios
+                        isLimitedStock = true;
+                    }
+                }
+                
+                system.debug('isLimitedStock: ' + isLimitedStock);
+                system.debug('wrapper.replacementProductId: ' + wrapper.replacementProductId);
+
+                if (isLimitedStock && wrapper.replacementProductId != null) {
+                    // Limited Stock with Replacement: show combined status WITHOUT lead time
+                    wrapper.status = '"' + LIMITED_STOCK_REPLACEMENT + ': ' + inventory.B2B_InventoryAvailableInSalesUOM__c + ' ' + wrapper.uom + '(s)"';
+                } else if (isLimitedStock) {
+                    // Limited Stock without Replacement: show status WITHOUT lead time
+                    wrapper.status = '"' + LIMITED_STOCK + ': ' + inventory.B2B_InventoryAvailableInSalesUOM__c + ' ' + wrapper.uom + '(s)"';
+                } else if (wrapper.replacementProductId != null) {
+                    wrapper.status = REPLACED;
+                } else if (inventory != null && inventory.B2B_Status__c == IN_STOCK) {
+                    // Regular In Stock: show status WITH lead time
+                    if (String.valueOf(wrapper.leadTime) == '0') {
+                        wrapper.status = '"' + IN_STOCK + ': ' + inventory.B2B_InventoryAvailableInSalesUOM__c + ' ' + wrapper.uom + '(s)' + ', ' + leadTimeValue + '"';
+                    } else {
+                        wrapper.status = '"' + IN_STOCK + ': ' + inventory.B2B_InventoryAvailableInSalesUOM__c + ' ' + wrapper.uom + '(s)' + ', ' + leadTimePrefix + ' ' + wrapper.leadTime + ' ' + leadTimeSuffix + '"';
+                    }
+                } else if (inventory != null && inventory.B2B_Status__c == OUT_OF_STOCK ) {
+                    if (String.valueOf(wrapper.leadTime) == '0') {
+                        wrapper.status = OUT_OF_STOCK + ':'+ leadTimeValue;
+                    } else {
+                        wrapper.status = OUT_OF_STOCK + ': ' + leadTimePrefix + ' ' + wrapper.leadTime + ' ' + leadTimeSuffix;
+                    }
+                } else {
+                    wrapper.status = 'NA';
+                }           
+                exportWrapper.add(wrapper);                                   
+            }
+            actionResponse = new B2BActionResponse(true, 'SUCCESS', exportWrapper);
+        } catch (Exception e) {
+            actionResponse = new B2BActionResponse(false, e.getMessage(), null);
+            B2BLoggingUtil.error(LOGGER_SETTINGS_ERR, CLASS_NAME, METHOD_NAME, e.getLineNumber(), 'Error getting list data for exporting'+e.getMessage(), e.getStackTraceString());
+            
+        } finally {
+            B2BLoggingUtil.flush();
+        }
+        return actionResponse;
+    }
+
+     //Escape a string for CSV to handle special characters    
+     private static String escapeFieldForCsv(String field) {
+        if (field == null) { 
+            return '';
+        }
+        return '"' + field.replace('"', '""') + '"';    
+    }
+
+    /**
+     * Wrapper class for the export list
+     */
+
+    public class ExportListWrapper{
+        @AuraEnabled
+        public string sequence {get;set;}
+        @AuraEnabled
+        public string productSku {get;set;}
+        @AuraEnabled
+        public string quantity {get;set;}
+        @AuraEnabled
+        public string qtyPerUnit {get;set;}
+        @AuraEnabled
+        public string uom {get;set;}
+        @AuraEnabled
+        public string currencyIsoCode {get;set;}
+        @AuraEnabled
+        public string comments {get;set;}
+        @AuraEnabled
+        public string shortDesc {get;set;} 
+        @AuraEnabled
+        public string leadTime {get;set;}
+        @AuraEnabled
+        public string productId {get;set;}  
+        @AuraEnabled     
+        public string infoCodeProd {get;set;}
+        @AuraEnabled
+        public string replacementProductId {get;set;}
+        @AuraEnabled
+        public string unitPrice {get;set;}
+        @AuraEnabled
+        public string totalPrice {get;set;}
+        @AuraEnabled
+        public string status {get;set;}
+    }
+}
