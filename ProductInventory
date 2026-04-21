@@ -1,0 +1,265 @@
+/**
+ * @description Data normalizer for inventory display
+ * Transforms raw inventory data into display-ready format based on displayType
+ */
+
+/**
+ * Status constants for inventory badges
+ */
+const INVENTORY_STATUS = {
+    IN_STOCK: 'instock',
+    OUT_OF_STOCK: 'outofstock',
+    LOW_STOCK: 'lowstock',
+    BACKORDERABLE: 'backorderable'
+};
+
+/**
+ * Display type constants
+ */
+const DISPLAY_TYPES = {
+    LIST: 'list',
+    PURCHASE: 'purchase',
+    BASIC: 'basic'
+};
+
+/**
+ * Normalize inventory data based on display type
+ * @param {Object} inventory - Raw inventory data object
+ * @param {String} displayType - Display context ('list', 'purchase', 'basic')
+ * @returns {Object} Normalized display data
+ */
+export function normalizeInventoryData(inventory, displayType = DISPLAY_TYPES.BASIC) {
+    // Handle null or undefined inventory
+    if (!inventory) {
+        return createEmptyDisplayData();
+    }
+
+    // Determine the display configuration based on displayType
+    const displayConfig = getDisplayConfig(displayType);
+    
+    // Extract and compute inventory values
+    const inventoryAvailable = getInventoryAvailable(inventory);
+    const leadTime = getLeadTime(inventory);
+    const status = determineStatus(inventory, inventoryAvailable);
+    
+    // Build normalized data object
+    return {
+        status: status,
+        labels: {}, // Labels are typically injected by the component via mixin
+        inventoryAvailable: inventoryAvailable,
+        displayAvailability: displayConfig.showAvailability && inventoryAvailable > 0,
+        leadTime: leadTime,
+        displayLeadTime: displayConfig.showLeadTime && leadTime !== null,
+        rawInventory: inventory // Keep reference to original data if needed
+    };
+}
+
+/**
+ * Get display configuration based on display type
+ * @param {String} displayType - Display context
+ * @returns {Object} Configuration object
+ */
+function getDisplayConfig(displayType) {
+    const normalizedType = (displayType || '').toLowerCase();
+    
+    switch (normalizedType) {
+        case DISPLAY_TYPES.LIST:
+            // List view: show badge + availability
+            return {
+                showAvailability: true,
+                showLeadTime: false
+            };
+        
+        case DISPLAY_TYPES.PURCHASE:
+            // Purchase view: show badge + availability + lead time
+            return {
+                showAvailability: true,
+                showLeadTime: true
+            };
+        
+        case DISPLAY_TYPES.BASIC:
+        default:
+            // Basic view: show badge only
+            return {
+                showAvailability: false,
+                showLeadTime: false
+            };
+    }
+}
+
+/**
+ * Extract inventory available quantity from inventory object
+ * @param {Object} inventory - Raw inventory data
+ * @returns {Number} Available quantity
+ */
+function getInventoryAvailable(inventory) {
+    // Check common property names for inventory availability
+    if (inventory.inventoryAvailable !== undefined && inventory.inventoryAvailable !== null) {
+        return Number(inventory.inventoryAvailable) || 0;
+    }
+    
+    if (inventory.qty !== undefined && inventory.qty !== null) {
+        return Number(inventory.qty) || 0;
+    }
+    
+    if (inventory.available !== undefined && inventory.available !== null) {
+        return Number(inventory.available) || 0;
+    }
+    
+    return 0;
+}
+
+/**
+ * Extract and format lead time from inventory object
+ * @param {Object} inventory - Raw inventory data
+ * @returns {String|null} Formatted lead time or null
+ */
+function getLeadTime(inventory) {
+    let leadTimeDays = null;
+    
+    // Check for lead time in various property formats
+    if (inventory.leadTime !== undefined && inventory.leadTime !== null) {
+        leadTimeDays = inventory.leadTime;
+    } else if (inventory.leadTimeDays !== undefined && inventory.leadTimeDays !== null) {
+        leadTimeDays = inventory.leadTimeDays;
+    }
+    
+    // If no lead time found, return null
+    if (leadTimeDays === null || leadTimeDays === undefined) {
+        return null;
+    }
+    
+    // Convert to number
+    const days = Number(leadTimeDays);
+    
+    // Handle zero or invalid lead time
+    if (isNaN(days) || days === 0) {
+        return 'Available now';
+    }
+    
+    // Format lead time message
+    return `Lead time up to ${days} business day${days !== 1 ? 's' : ''}`;
+}
+
+/**
+ * Determine inventory status for badge display
+ * @param {Object} inventory - Raw inventory data
+ * @param {Number} inventoryAvailable - Available quantity
+ * @returns {String} Status identifier
+ */
+function determineStatus(inventory, inventoryAvailable) {
+    // Check if explicit status is provided
+    if (inventory.status) {
+        return normalizeStatus(inventory.status);
+    }
+    
+    if (inventory.stockStatus) {
+        return normalizeStatus(inventory.stockStatus);
+    }
+    
+    if (inventory.inventoryStatus) {
+        return normalizeStatus(inventory.inventoryStatus);
+    }
+    
+    // Determine status based on available inventory
+    if (inventoryAvailable > 10) {
+        return INVENTORY_STATUS.IN_STOCK;
+    } else if (inventoryAvailable > 0) {
+        return INVENTORY_STATUS.LOW_STOCK;
+    } else if (inventory.backorderable === true) {
+        return INVENTORY_STATUS.BACKORDERABLE;
+    } else {
+        return INVENTORY_STATUS.OUT_OF_STOCK;
+    }
+}
+
+/**
+ * Normalize status string to consistent format
+ * @param {String} status - Raw status value
+ * @returns {String} Normalized status
+ */
+function normalizeStatus(status) {
+    if (!status) {
+        return INVENTORY_STATUS.OUT_OF_STOCK;
+    }
+    
+    const normalized = String(status).toLowerCase().trim();
+    
+    // Map various status formats to standard values
+    if (normalized.includes('in stock') || normalized === 'instock') {
+        return INVENTORY_STATUS.IN_STOCK;
+    }
+    
+    if (normalized.includes('out of stock') || normalized === 'outofstock') {
+        return INVENTORY_STATUS.OUT_OF_STOCK;
+    }
+    
+    if (normalized.includes('low stock') || normalized === 'lowstock') {
+        return INVENTORY_STATUS.LOW_STOCK;
+    }
+    
+    if (normalized.includes('backorder') || normalized === 'backorderable') {
+        return INVENTORY_STATUS.BACKORDERABLE;
+    }
+    
+    return normalized;
+}
+
+/**
+ * Create empty display data for null/undefined inventory
+ * @returns {Object} Empty display data structure
+ */
+function createEmptyDisplayData() {
+    return {
+        status: INVENTORY_STATUS.OUT_OF_STOCK,
+        labels: {},
+        inventoryAvailable: 0,
+        displayAvailability: false,
+        leadTime: null,
+        displayLeadTime: false,
+        rawInventory: null
+    };
+}
+
+/**
+ * Export constants for use in components
+ */
+export { INVENTORY_STATUS, DISPLAY_TYPES };
+
+
+/**
+ * Created by stroxell on 4/16/2026.
+ */
+
+import { LightningElement, api } from 'lwc';
+import { normalizeInventoryData } from './dataNormalizer';
+
+export default class B2BProductInventory extends LightningElement {
+
+@api inventory;  //productData.inventory
+@api displayType;  //'list','purchase','basic'
+
+    /**
+     * Computed property that returns normalized inventory display data
+     * @returns {Object} Normalized data structure for rendering
+     */
+    get normalizedData() {
+        return normalizeInventoryData(this.inventory, this.displayType);
+    }
+
+    // @api status;                 // displayData.itemStatus
+    // @api labels;                 
+    // @api inventory;     // displayData.inventoryAvailable
+    // @api displayAvailability;    // boolean flag to render availability text
+    // @api leadTime;               // displayData.leadTime
+    // @api displayLeadTime;        // boolean flag to render lead time
+
+    // get availableDisplay() {
+    //     //return `${this.inventory} available`;
+    //     return this.displayAvailability;
+    // }
+
+    // get leadTimeDisplay() {
+    //     return this.leadTime;
+    // }
+}
