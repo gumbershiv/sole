@@ -1,20 +1,5 @@
 /**
- * @description Data normalizer for inventory display
- * Transforms raw inventory data into display-ready format based on displayType
- */
-
-/**
- * Status constants for inventory badges
- */
-const INVENTORY_STATUS = {
-    IN_STOCK: 'instock',
-    OUT_OF_STOCK: 'outofstock',
-    LOW_STOCK: 'lowstock',
-    BACKORDERABLE: 'backorderable'
-};
-
-/**
- * Display type constants
+ * Display types
  */
 const DISPLAY_TYPES = {
     LIST: 'list',
@@ -23,243 +8,228 @@ const DISPLAY_TYPES = {
 };
 
 /**
- * Normalize inventory data based on display type
- * @param {Object} inventory - Raw inventory data object
- * @param {String} displayType - Display context ('list', 'purchase', 'basic')
- * @returns {Object} Normalized display data
+ * Normalize inventory data
  */
 export function normalizeInventoryData(inventory, displayType = DISPLAY_TYPES.BASIC) {
-    // Handle null or undefined inventory
+
     if (!inventory) {
         return createEmptyDisplayData();
     }
 
-    // Determine the display configuration based on displayType
-    const displayConfig = getDisplayConfig(displayType);
-    
-    // Extract and compute inventory values
-    const inventoryAvailable = getInventoryAvailable(inventory);
-    const leadTime = getLeadTime(inventory);
-    const status = determineStatus(inventory, inventoryAvailable);
-    
-    // Build normalized data object
+    const config = getDisplayConfig(displayType);
+    const stock = extractInventory(inventory);
+    const leadTime = extractLeadTime(inventory);
+
     return {
-        status: status,
-        labels: {}, // Labels are typically injected by the component via mixin
-        inventoryAvailable: inventoryAvailable,
-        displayAvailability: displayConfig.showAvailability && inventoryAvailable > 0,
-        leadTime: leadTime,
-        displayLeadTime: displayConfig.showLeadTime && leadTime !== null,
-        rawInventory: inventory // Keep reference to original data if needed
+        // ✅ Pure pass-through (only trim for safety)
+        status: inventory.status ? String(inventory.status).trim() : '',
+
+        inventoryAvailable: stock.total,
+
+        availability: {
+            show: config.showAvailability && stock.total > 0,
+            currentWarehouse: stock.current,
+            otherWarehouse: stock.other,
+            total: stock.total
+        },
+
+        leadTime: {
+            show: config.showLeadTime && leadTime !== null,
+            value: leadTime
+        },
+
+        purchaseLimit: Number(inventory.purchaseLimit) || null,
+
+        sku: inventory.productSku || null,
+        productId: inventory.productId || null,
+
+        warehouse: {
+            code: inventory.currentWarehouseCode || null
+        },
+
+        rawInventory: inventory
     };
 }
 
 /**
- * Get display configuration based on display type
- * @param {String} displayType - Display context
- * @returns {Object} Configuration object
+ * Display config
  */
 function getDisplayConfig(displayType) {
-    const normalizedType = (displayType || '').toLowerCase();
-    
-    switch (normalizedType) {
+    switch ((displayType || '').toLowerCase()) {
+
         case DISPLAY_TYPES.LIST:
-            // List view: show badge + availability
-            return {
-                showAvailability: true,
-                showLeadTime: false
-            };
-        
+            return { showAvailability: true, showLeadTime: false };
+
         case DISPLAY_TYPES.PURCHASE:
-            // Purchase view: show badge + availability + lead time
-            return {
-                showAvailability: true,
-                showLeadTime: true
-            };
-        
+            return { showAvailability: true, showLeadTime: true };
+
         case DISPLAY_TYPES.BASIC:
         default:
-            // Basic view: show badge only
-            return {
-                showAvailability: false,
-                showLeadTime: false
-            };
+            return { showAvailability: false, showLeadTime: false };
     }
 }
 
 /**
- * Extract inventory available quantity from inventory object
- * @param {Object} inventory - Raw inventory data
- * @returns {Number} Available quantity
+ * Inventory extraction
  */
-function getInventoryAvailable(inventory) {
-    // Check common property names for inventory availability
-    if (inventory.inventoryAvailable !== undefined && inventory.inventoryAvailable !== null) {
-        return Number(inventory.inventoryAvailable) || 0;
-    }
-    
-    if (inventory.qty !== undefined && inventory.qty !== null) {
-        return Number(inventory.qty) || 0;
-    }
-    
-    if (inventory.available !== undefined && inventory.available !== null) {
-        return Number(inventory.available) || 0;
-    }
-    
-    return 0;
+function extractInventory(inventory) {
+
+    const current = Number(inventory.currentWarehouseInventory) || 0;
+    const other = Number(inventory.otherWarehouseInventory) || 0;
+    const global = Number(inventory.globalWarehouseInventory) || 0;
+
+    const total = global > 0 ? global : (current + other);
+
+    return {
+        current,
+        other,
+        total
+    };
 }
 
 /**
- * Extract and format lead time from inventory object
- * @param {Object} inventory - Raw inventory data
- * @returns {String|null} Formatted lead time or null
+ * Lead time
  */
-function getLeadTime(inventory) {
-    let leadTimeDays = null;
-    
-    // Check for lead time in various property formats
-    if (inventory.leadTime !== undefined && inventory.leadTime !== null) {
-        leadTimeDays = inventory.leadTime;
-    } else if (inventory.leadTimeDays !== undefined && inventory.leadTimeDays !== null) {
-        leadTimeDays = inventory.leadTimeDays;
-    }
-    
-    // If no lead time found, return null
-    if (leadTimeDays === null || leadTimeDays === undefined) {
+function extractLeadTime(inventory) {
+
+    let raw = inventory.currentWarehouseLeadTime;
+
+    if (raw === 'null' || raw === undefined || raw === null) {
         return null;
     }
-    
-    // Convert to number
-    const days = Number(leadTimeDays);
-    
-    // Handle zero or invalid lead time
-    if (isNaN(days) || days === 0) {
+
+    const days = Number(raw);
+
+    if (isNaN(days)) {
+        return null;
+    }
+
+    if (days === 0) {
         return 'Available now';
     }
-    
-    // Format lead time message
+
     return `Lead time up to ${days} business day${days !== 1 ? 's' : ''}`;
 }
 
 /**
- * Determine inventory status for badge display
- * @param {Object} inventory - Raw inventory data
- * @param {Number} inventoryAvailable - Available quantity
- * @returns {String} Status identifier
- */
-function determineStatus(inventory, inventoryAvailable) {
-    // Check if explicit status is provided
-    if (inventory.status) {
-        return normalizeStatus(inventory.status);
-    }
-    
-    if (inventory.stockStatus) {
-        return normalizeStatus(inventory.stockStatus);
-    }
-    
-    if (inventory.inventoryStatus) {
-        return normalizeStatus(inventory.inventoryStatus);
-    }
-    
-    // Determine status based on available inventory
-    if (inventoryAvailable > 10) {
-        return INVENTORY_STATUS.IN_STOCK;
-    } else if (inventoryAvailable > 0) {
-        return INVENTORY_STATUS.LOW_STOCK;
-    } else if (inventory.backorderable === true) {
-        return INVENTORY_STATUS.BACKORDERABLE;
-    } else {
-        return INVENTORY_STATUS.OUT_OF_STOCK;
-    }
-}
-
-/**
- * Normalize status string to consistent format
- * @param {String} status - Raw status value
- * @returns {String} Normalized status
- */
-function normalizeStatus(status) {
-    if (!status) {
-        return INVENTORY_STATUS.OUT_OF_STOCK;
-    }
-    
-    const normalized = String(status).toLowerCase().trim();
-    
-    // Map various status formats to standard values
-    if (normalized.includes('in stock') || normalized === 'instock') {
-        return INVENTORY_STATUS.IN_STOCK;
-    }
-    
-    if (normalized.includes('out of stock') || normalized === 'outofstock') {
-        return INVENTORY_STATUS.OUT_OF_STOCK;
-    }
-    
-    if (normalized.includes('low stock') || normalized === 'lowstock') {
-        return INVENTORY_STATUS.LOW_STOCK;
-    }
-    
-    if (normalized.includes('backorder') || normalized === 'backorderable') {
-        return INVENTORY_STATUS.BACKORDERABLE;
-    }
-    
-    return normalized;
-}
-
-/**
- * Create empty display data for null/undefined inventory
- * @returns {Object} Empty display data structure
+ * Empty fallback
  */
 function createEmptyDisplayData() {
     return {
-        status: INVENTORY_STATUS.OUT_OF_STOCK,
-        labels: {},
+        status: '',
         inventoryAvailable: 0,
-        displayAvailability: false,
-        leadTime: null,
-        displayLeadTime: false,
+        availability: {
+            show: false,
+            currentWarehouse: 0,
+            otherWarehouse: 0,
+            total: 0
+        },
+        leadTime: {
+            show: false,
+            value: null
+        },
+        purchaseLimit: null,
+        sku: null,
+        productId: null,
+        warehouse: {
+            code: null
+        },
         rawInventory: null
     };
 }
 
-/**
- * Export constants for use in components
- */
-export { INVENTORY_STATUS, DISPLAY_TYPES };
-
-
-/**
- * Created by stroxell on 4/16/2026.
- */
+export { DISPLAY_TYPES };
 
 import { LightningElement, api } from 'lwc';
 import { normalizeInventoryData } from './dataNormalizer';
 
 export default class B2BProductInventory extends LightningElement {
 
-@api inventory;  //productData.inventory
-@api displayType;  //'list','purchase','basic'
+    _inventory;
+    _displayType;
+    _normalizedData;
 
-    /**
-     * Computed property that returns normalized inventory display data
-     * @returns {Object} Normalized data structure for rendering
-     */
-    get normalizedData() {
-        return normalizeInventoryData(this.inventory, this.displayType);
+    @api
+    set inventory(value) {
+        this._inventory = value;
+        this.computeData();
     }
 
-    // @api status;                 // displayData.itemStatus
-    // @api labels;                 
-    // @api inventory;     // displayData.inventoryAvailable
-    // @api displayAvailability;    // boolean flag to render availability text
-    // @api leadTime;               // displayData.leadTime
-    // @api displayLeadTime;        // boolean flag to render lead time
+    get inventory() {
+        return this._inventory;
+    }
 
-    // get availableDisplay() {
-    //     //return `${this.inventory} available`;
-    //     return this.displayAvailability;
-    // }
+    @api
+    set displayType(value) {
+        this._displayType = value;
+        this.computeData();
+    }
 
-    // get leadTimeDisplay() {
-    //     return this.leadTime;
-    // }
+    get displayType() {
+        return this._displayType;
+    }
+
+    computeData() {
+        this._normalizedData = normalizeInventoryData(
+            this._inventory,
+            this._displayType
+        );
+    }
+
+    get data() {
+        return this._normalizedData;
+    }
+
+    // Simple helpers for template
+    get hasAvailability() {
+        return this.data?.availability?.show;
+    }
+
+    get hasLeadTime() {
+        return this.data?.leadTime?.show;
+    }
 }
+
+<template>
+    <template if:true={data}>
+
+        <!-- STATUS BADGE -->
+        <div class="slds-m-bottom_x-small">
+            <span class="slds-badge">
+                {data.status}
+            </span>
+        </div>
+
+        <!-- AVAILABILITY -->
+        <template if:true={hasAvailability}>
+            <div class="slds-text-body_small slds-m-bottom_x-small">
+
+                <div>
+                    <strong>{data.availability.total}</strong> available
+                </div>
+
+                <template if:true={data.availability.currentWarehouse}>
+                    <div>
+                        {data.availability.currentWarehouse} in your warehouse
+                    </div>
+                </template>
+
+                <template if:true={data.availability.otherWarehouse}>
+                    <div>
+                        {data.availability.otherWarehouse} in other warehouses
+                    </div>
+                </template>
+
+            </div>
+        </template>
+
+        <!-- LEAD TIME -->
+        <template if:true={hasLeadTime}>
+            <div class="slds-text-color_weak slds-text-body_small">
+                {data.leadTime.value}
+            </div>
+        </template>
+
+    </template>
+</template>
+
