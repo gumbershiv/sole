@@ -1,0 +1,57 @@
+[data=(ProductData:
+	[backorderable=true, 
+	currencyCode=USD, 
+	fields=
+		{
+			B2B_Info_Code__c=null, 
+			B2B_WEIGHT__c=0.01, 
+			Description=Washer, Flat, 0.375 In, 17-7 Ph, 
+			Name=1010500, StockKeepingUnit=1010500}, 
+			finalPart=null, 
+			finalPartId=null, 
+			finalPartPurchaseLimit=null, 
+			id=01tUm00000DjDp8IAF, 
+			insalecategory=false, 
+			instock=true, 
+			inventoryAvailable=459, 
+			inventory = [
+				status = "In Stock",
+				otherWarehouseStock = "In Stock",
+				purchaseLimit="99999",
+				productSku = "1010500",
+				productId = "",
+				otherWarehouseInventory ="15",
+				globalWarehouseInventory = "21",
+				currentWarehouseLeadTime = "null",
+				currentWarehouseInventory = "6",
+				currentWarehouseCode ="UDQS10",
+				allowBackOrder = true
+			]
+			isActive=true, 
+			leadTime=50, 
+			listprice=13.00, 
+			newParts=null, 
+			olderParts=(
+				PartSupersession:[
+					backorderable=false, 
+					inventoryAvailable=null, 
+					isActive=true, 
+					productId=01tUm00000Djqc1IAB, 
+					sellable=false, 
+					sku=71010126
+				]
+			), 
+			packagePartId=null, 
+			packagePartQuantity=null, 
+			productMedia=DefaultImage:[alternateText=1010500 Primary Product Image, contentVersionId=null, id=2pmUm0000006ER3IAM, mediaType=Image, sortOrder=0, thumbnailUrl=null, title=1010500-1, url=https://s7d2.scene7.com/is/image/Caterpillar/CM20180314-61187-44029], 
+			purchaseLimit=99999, 
+			sellable=true, 
+			sequence=null, 
+			sku=1010500, 
+			stockStatus=In Stock, 
+			unitprice=13.00, 
+			uom=Pack, 
+			uomMessage=pack of 25, 
+			uomqty=25
+	]
+), isSuccess=true, message=success, messages=null]
