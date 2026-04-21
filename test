@@ -1,104 +1,65 @@
-@isTest
-public class B2BAPI_POPDFSubmit_Test {
+<template>
 
-    @TestSetup
-    static void setupData() {
-        // Create a test user
-        Profile p = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
-        User u = new User(
-            Alias = 'testu',
-            Email='testuser@example.com',
-            EmailEncodingKey='UTF-8',
-            LastName='Test',
-            LanguageLocaleKey='en_US',
-            LocaleSidKey='en_US',
-            ProfileId = p.Id,
-            TimeZoneSidKey='America/Los_Angeles',
-            UserName='testuser' + System.currentTimeMillis() + '@example.com'
-        );
-        insert u;
+    <div class="slds-p-around_medium">
 
-        // Create a sample Order (will be used in some exception tests)
-        Order ord = new Order(
-            AccountId = [SELECT Id FROM Account LIMIT 1].Id,
-            EffectiveDate = Date.today(),
-            Status = 'Draft',
-            PoNumber = 'PO-123',
-            B2B_OrderNumber__c = 'ORD-001'
-        );
-        insert ord;
-    }
+        <h2 class="slds-text-heading_medium slds-m-bottom_medium">
+            Inventory Component Demo
+        </h2>
 
-    @isTest
-    static void test_callOut_missingMetadata() {
-        User u = [SELECT Id FROM User WHERE Alias='testu' LIMIT 1];
-        Order ord = [SELECT Id FROM Order LIMIT 1];
+        <!-- BASIC -->
+        <div class="slds-box slds-m-bottom_medium">
+            <h3 class="slds-text-title_bold slds-m-bottom_small">Basic View</h3>
 
-        Test.startTest();
-        System.runAs(u) {
-            // No AuthenticationAPI__mdt created -> should hit exception
-            B2BAPI_POPDFSubmit.callOut(ord.Id);
-        }
-        Test.stopTest();
+            <c-b2-b-product-inventory
+                inventory={inventoryMock}
+                display-type="basic">
+            </c-b2-b-product-inventory>
+        </div>
 
-        // Verify logs were written
-        System.assertEquals(true, Limits.getDmlRows() >= 0, 'Should log exception');
-    }
+        <!-- LIST -->
+        <div class="slds-box slds-m-bottom_medium">
+            <h3 class="slds-text-title_bold slds-m-bottom_small">List View</h3>
 
-    @isTest
-    static void test_callOut_invalidOrderId() {
-        User u = [SELECT Id FROM User WHERE Alias='testu' LIMIT 1];
+            <c-b2-b-product-inventory
+                inventory={inventoryMock}
+                display-type="list">
+            </c-b2-b-product-inventory>
+        </div>
 
-        Test.startTest();
-        System.runAs(u) {
-            // Invalid order id should throw exception in query
-            B2BAPI_POPDFSubmit.callOut('001XXXXXXXXXXXX'); 
-        }
-        Test.stopTest();
-    }
+        <!-- PURCHASE -->
+        <div class="slds-box">
+            <h3 class="slds-text-title_bold slds-m-bottom_small">Purchase View</h3>
 
-    @isTest
-    static void test_generateXML_noAttachment() {
-        Order ord = [SELECT Id FROM Order LIMIT 1];
-        // Remove OrderNumber to force exception branch
-        ord.B2B_OrderNumber__c = null;
-        update ord;
+            <c-b2-b-product-inventory
+                inventory={inventoryMock}
+                display-type="purchase">
+            </c-b2-b-product-inventory>
+        </div>
 
-        Test.startTest();
-        String xml = B2BAPI_POPDFSubmit.generatePOPDFSubmitXMLReq(ord.Id);
-        Test.stopTest();
+    </div>
 
-        System.assertEquals('', xml, 'Should return blank when no attachments or missing order number');
-    }
+</template>
 
-    @isTest
-    static void test_generateXML_orderNotFound() {
-        Test.startTest();
-        // Pass invalid Id -> query exception caught
-        String xml = B2BAPI_POPDFSubmit.generatePOPDFSubmitXMLReq('801XXXXXXXXXXXX');
-        Test.stopTest();
 
-        System.assertEquals('', xml, 'Should return blank string on exception');
-    }
+import { LightningElement } from 'lwc';
 
-    @isTest
-    static void test_callOut_withExceptionInHttp() {
-        User u = [SELECT Id FROM User WHERE Alias='testu' LIMIT 1];
-        Order ord = [SELECT Id FROM Order LIMIT 1];
+export default class B2bInventoryDemo extends LightningElement {
 
-        // Insert dummy metadata so code goes to callout block
-        AuthenticationAPI__mdt meta = new AuthenticationAPI__mdt(
-            DeveloperName='POPdfSubmitRequestAPI',
-            MasterLabel='POPdfSubmitRequestAPI',
-            Endpoint__c='https://invalid.endpoint'
-        );
-        insert meta;
+    // ✅ Mock inventory (aligned with your structure)
+    inventoryMock = {
+        status: "In Stock",
+        otherWarehouseStock: "In Stock",
+        purchaseLimit: "99999",
+        productSku: "1010500",
+        productId: "",
+        otherWarehouseInventory: "15",
+        globalWarehouseInventory: "21",
+        currentWarehouseLeadTime: null,
+        currentWarehouseInventory: "6",
+        currentWarehouseCode: "UDQS10",
+        allowBackOrder: true
+    };
 
-        Test.startTest();
-        System.runAs(u) {
-            // Force it to hit exception since endpoint is invalid
-            B2BAPI_POPDFSubmit.callOut(ord.Id);
-        }
-        Test.stopTest();
-    }
+    // Optional: if you want to loop instead of hardcoding
+    displayTypes = ['basic', 'list', 'purchase'];
 }
