@@ -7,171 +7,90 @@ const DISPLAY_TYPES = {
     BASIC: 'basic'
 };
 
-/**
- * Normalize inventory data
- */
-export function transformData(inventory, displayType = DISPLAY_TYPES.BASIC, inventoryUtil) {
+const STATUS = {
+    IN_STOCK: 'In Stock',
+    LIMITED: 'Limited stock',
+    OUT: 'Out of stock',
+    UNAVAILABLE: 'Unavailable'
+};
 
+export function transformData(
+    inventory,
+    displayType = DISPLAY_TYPES.BASIC,
+    inventoryUtil
+) {
     if (!inventory) {
         return createEmptyDisplayData();
     }
 
     const config = getDisplayConfig(displayType);
-
     const stock = extractInventory(inventory);
 
-    const currentLeadTime = extractLeadTime(inventory.currentWarehouseLeadTime);
-    const globalLeadTime = extractLeadTime(inventory.globalWarehouseLeadTime);
+    const leadTimes = {
+        current: extractLeadTime(inventory.currentWarehouseLeadTime),
+        global: extractLeadTime(inventory.globalWarehouseLeadTime)
+    };
 
     const purchaseLimit = Number(inventory.purchaseLimit) || 0;
-    const allowBackOrder = inventory.allowBackOrder !== undefined ? inventory.allowBackOrder : true;
+    const allowBackOrder =
+        inventory.allowBackOrder !== undefined
+            ? inventory.allowBackOrder
+            : true;
 
-    // -------------------------------
-    // Status calculation
-    // -------------------------------
-    const currentStatus = inventoryUtil.calculateStatus(
-        inventory.currentWarehouseStatus,
-        stock.current,
-        purchaseLimit,
-        allowBackOrder
-    );
+    // -----------------------------------
+    // Statuses
+    // -----------------------------------
+    const statuses = {
+        current: inventoryUtil.calculateStatus(
+            inventory.currentWarehouseStatus,
+            stock.current,
+            purchaseLimit,
+            allowBackOrder
+        ),
 
-    const alternateStatus = inventoryUtil.calculateStatus(
-        inventory.otherWarehouseStatus,
-        stock.other,
-        purchaseLimit,
-        allowBackOrder
-    );
-
-    // -------------------------------
-    // Helpers
-    // -------------------------------
-    const isSuppressed = (status) =>
-        status === 'Out of stock' || status === 'Unavailable';
-
-    const suppressCurrent = isSuppressed(currentStatus);
-    const suppressAlternate = isSuppressed(alternateStatus);
-
-    // -------------------------------
-    // Single status (for list)
-    // -------------------------------
-    const statuses = [currentStatus, alternateStatus];
-
-    let singleStatus;
-    if (statuses.includes('In Stock')) {
-        singleStatus = 'In Stock';
-    } else if (statuses.includes('Limited stock')) {
-        singleStatus = 'Limited stock';
-    } else if (statuses.every(s => s === 'Out of stock')) {
-        singleStatus = 'Out of stock';
-    } else if (statuses.every(s => s === 'Unavailable')) {
-        singleStatus = 'Unavailable';
-    } else {
-        singleStatus = 'Out of stock';
-    }
-
-    // -------------------------------
-    // Tooltip (list view)
-    // -------------------------------
-    const processingTime = globalLeadTime || '14 days';
-
-    const tooltipText =
-        (singleStatus === 'In Stock' || singleStatus === 'Limited stock')
-            ? `${!suppressCurrent ? `${stock.current} parts in your warehouse. ` : ''}${!suppressAlternate ? `${stock.other} parts available in alternate locations. ` : ''}May require up to ${processingTime}.`.trim()
-            : '';
-
-    // -------------------------------
-    // Lead time (list)
-    // -------------------------------
-    const leadTimeText =
-        singleStatus === 'Out of stock'
-            ? (alternateStatus !== 'Out of stock' ? globalLeadTime : currentLeadTime)
-            : null;
-
-    const showInventory = singleStatus === 'In Stock' || singleStatus === 'Limited stock';
-
-    // -------------------------------
-    // PURCHASE VIEW ROWS
-    // -------------------------------
-    const currentRow = {
-        label: 'Current Warehouse',
-        statusLabel: currentStatus,
-        inventoryCount: suppressCurrent ? 0 : stock.current,
-        availabilityText: suppressCurrent ? null : stock.current,
-        leadTimeText: currentStatus === 'Out of stock' ? currentLeadTime : null,
-        showIcon: currentStatus !== 'Unavailable',
-        showAvailability: !suppressCurrent
+        alternate: inventoryUtil.calculateStatus(
+            inventory.otherWarehouseStatus,
+            stock.alternate,
+            purchaseLimit,
+            allowBackOrder
+        )
     };
 
-    const alternateRow = {
-        label: 'Alternate Warehouses',
-        statusLabel: alternateStatus,
-        inventoryCount: suppressAlternate ? 0 : stock.other,
-        availabilityText: suppressAlternate ? null : stock.other,
-        leadTimeText: alternateStatus === 'Out of stock' ? globalLeadTime : null,
-        processingText:
-            (alternateStatus === 'In Stock' || alternateStatus === 'Limited stock')
-                ? `May require up to ${processingTime}`
-                : null,
-        showIcon: alternateStatus !== 'Unavailable',
-        showAvailability: !suppressAlternate
-    };
+    // -----------------------------------
+    // Derived values
+    // -----------------------------------
+    const singleStatus = getSingleStatus(statuses);
 
-    // -------------------------------
-    // Purchase visibility (clean rules)
-    // -------------------------------
-    const showPurchaseCurrent =
-        currentStatus !== 'Unavailable' || alternateStatus === 'Unavailable';
+    const listData = buildListData({
+        stock,
+        statuses,
+        singleStatus,
+        leadTimes
+    });
 
-    const showPurchaseAlternate =
-        alternateStatus !== 'Unavailable' &&
-        !(alternateStatus === 'Out of stock' && currentStatus === 'In Stock');
+    const purchaseData = buildPurchaseData({
+        stock,
+        statuses,
+        leadTimes
+    });
 
-    // -------------------------------
-    // BASIC STATUS
-    // -------------------------------
     const basicDisplayStatus =
         displayType === DISPLAY_TYPES.BASIC
-            ? inventoryUtil.determineBasicDisplayStatus(currentStatus, alternateStatus)
+            ? inventoryUtil.determineBasicDisplayStatus(
+                  statuses.current,
+                  statuses.alternate
+              )
             : null;
 
-    // -------------------------------
-    // FINAL RESPONSE
-    // -------------------------------
     return {
         config,
-
-        currentStatus,
-        alternateStatus,
+        statuses,
         basicDisplayStatus,
+        list: listData,
+        purchase: purchaseData,
 
-        list: {
-            singleStatus,
-            tooltipText,
-            leadTimeText,
-            globalAvailability: suppressAlternate ? 0 : stock.global,
-            showInventory,
-            showLeadTime: !!leadTimeText,
-            showTooltip: !!tooltipText
-        },
-
-        purchase: {
-            showCurrent: showPurchaseCurrent,
-            showAlternate: showPurchaseAlternate,
-            currentRow,
-            alternateRow
-        },
-
-        inventoryAvailable: {
-            current: stock.current,
-            alternate: stock.other,
-            global: stock.global
-        },
-
-        leadTime: {
-            current: currentLeadTime,
-            global: globalLeadTime
-        },
+        inventoryAvailable: stock,
+        leadTime: leadTimes,
 
         purchaseLimit,
         allowBackOrder,
@@ -188,11 +107,146 @@ export function transformData(inventory, displayType = DISPLAY_TYPES.BASIC, inve
 }
 
 /**
- * Display config
+ * Build LIST view
  */
+function buildListData({ stock, statuses, singleStatus, leadTimes }) {
+    const showInventory = isAvailable(singleStatus);
+    const showLeadTime = singleStatus === STATUS.OUT;
+
+    const tooltipText = showInventory
+        ? buildTooltip(stock, statuses, leadTimes)
+        : '';
+
+    return {
+        singleStatus,
+        globalAvailability: stock.global,
+        tooltipText,
+        leadTimeText: showLeadTime
+            ? leadTimes.global || leadTimes.current
+            : null,
+        showInventory,
+        showLeadTime,
+        showTooltip: !!tooltipText
+    };
+}
+
+/**
+ * Build PURCHASE view
+ */
+function buildPurchaseData({ stock, statuses, leadTimes }) {
+    const currentRow = buildWarehouseRow({
+        label: 'Current Warehouse',
+        icon: 'utility:home',
+        status: statuses.current,
+        inventory: stock.current,
+        leadTime: leadTimes.current
+    });
+
+    const alternateRow = buildWarehouseRow({
+        label: 'Alternate Warehouses',
+        icon: 'utility:world',
+        status: statuses.alternate,
+        inventory: stock.alternate,
+        leadTime: leadTimes.global
+    });
+
+    return {
+        showCurrent:
+            statuses.current !== STATUS.UNAVAILABLE ||
+            statuses.alternate === STATUS.UNAVAILABLE,
+
+        showAlternate:
+            statuses.alternate !== STATUS.UNAVAILABLE &&
+            !(statuses.alternate === STATUS.OUT &&
+                statuses.current === STATUS.IN_STOCK),
+
+        currentRow,
+        alternateRow
+    };
+}
+
+/**
+ * Row builder
+ */
+function buildWarehouseRow({
+    label,
+    icon,
+    status,
+    inventory,
+    leadTime
+}) {
+    const available = isAvailable(status);
+
+    return {
+        label,
+        icon,
+        statusLabel: status,
+        inventoryCount: available ? inventory : 0,
+        availabilityText: available ? inventory : null,
+        leadTimeText: status === STATUS.OUT ? leadTime : null,
+        processingText:
+            available && icon === 'utility:world'
+                ? 'Additional processing time may apply'
+                : null,
+        showAvailability: available,
+        showIcon: status !== STATUS.UNAVAILABLE
+    };
+}
+
+/**
+ * Single badge status for list view
+ */
+function getSingleStatus(statuses) {
+    const values = Object.values(statuses);
+
+    if (values.includes(STATUS.IN_STOCK)) {
+        return STATUS.IN_STOCK;
+    }
+
+    if (values.includes(STATUS.LIMITED)) {
+        return STATUS.LIMITED;
+    }
+
+    if (values.every(status => status === STATUS.OUT)) {
+        return STATUS.OUT;
+    }
+
+    return STATUS.UNAVAILABLE;
+}
+
+/**
+ * Tooltip
+ */
+function buildTooltip(stock, statuses, leadTimes) {
+    let message = '';
+
+    if (isAvailable(statuses.current)) {
+        message += `${stock.current} parts in your warehouse. `;
+    }
+
+    if (isAvailable(statuses.alternate)) {
+        message += `${stock.alternate} parts in alternate locations. `;
+    }
+
+    if (leadTimes.global) {
+        message += `May require ${leadTimes.global}.`;
+    }
+
+    return message.trim();
+}
+
+/**
+ * Helpers
+ */
+function isAvailable(status) {
+    return (
+        status === STATUS.IN_STOCK ||
+        status === STATUS.LIMITED
+    );
+}
+
 function getDisplayConfig(displayType) {
     switch ((displayType || '').toLowerCase()) {
-
         case DISPLAY_TYPES.LIST:
             return { isListView: true };
 
@@ -205,84 +259,221 @@ function getDisplayConfig(displayType) {
     }
 }
 
-/**
- * Inventory extraction
- */
 function extractInventory(inventory) {
     return {
         current: Number(inventory.currentWarehouseInventory) || 0,
-        other: Number(inventory.otherWarehouseInventory) || 0,
+        alternate: Number(inventory.otherWarehouseInventory) || 0,
         global: Number(inventory.globalWarehouseInventory) || 0
     };
 }
 
-/**
- * Lead time formatter
- */
-function extractLeadTime(leadTime) {
-
-    if (leadTime === 'null' || leadTime === undefined || leadTime === null) {
+function extractLeadTime(value) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === 'null'
+    ) {
         return null;
     }
 
-    const days = Number(leadTime);
+    const days = Number(value);
 
     if (isNaN(days)) {
         return null;
     }
 
-    return `Lead time up to ${days} business day${days !== 1 ? 's' : ''}`;
+    return `Lead time up to ${days} business day${
+        days !== 1 ? 's' : ''
+    }`;
 }
 
-/**
- * Empty fallback
- */
 function createEmptyDisplayData() {
     return {
         config: { isBasicView: true },
-        currentStatus: "In Stock",
-        alternateStatus: "In Stock",
-        basicDisplayStatus: "In Stock",
-
-        list: {
-            singleStatus: "In Stock",
-            tooltipText: "",
-            leadTimeText: null,
-            globalAvailability: 0,
-            showInventory: false,
-            showLeadTime: false,
-            showTooltip: false
+        statuses: {
+            current: STATUS.IN_STOCK,
+            alternate: STATUS.IN_STOCK
         },
-
-        purchase: {
-            showCurrent: true,
-            showAlternate: false,
-            currentRow: {},
-            alternateRow: {}
-        },
-
+        basicDisplayStatus: STATUS.IN_STOCK,
+        list: {},
+        purchase: {},
         inventoryAvailable: {
             current: 0,
             alternate: 0,
             global: 0
         },
-
         leadTime: {
             current: null,
             global: null
-        },
-
-        purchaseLimit: 0,
-        allowBackOrder: true,
-        productId: null,
-        productSku: null,
-
-        warehouse: {
-            code: null
-        },
-
-        rawInventory: null
+        }
     };
 }
 
 export { DISPLAY_TYPES };
+
+
+
+<template>
+
+    <!-- LIST -->
+    <template lwc:if={data.config.isListView}>
+        <div class="slds-grid slds-p-top_xx-small">
+
+            <c-b2b-badge
+                status={data.list.singleStatus}
+                labels={labels}>
+            </c-b2b-badge>&nbsp;&nbsp;
+
+            <template lwc:if={data.list.showLeadTime}>
+                <span class="data-label-text-small">
+                    {data.list.leadTimeText}
+                </span>
+            </template>
+
+            <template lwc:if={data.list.showInventory}>
+                <span class="data-label-text-small">
+                    {data.list.globalAvailability}
+                    {labels.Available}
+                </span>
+            </template>
+
+            <template lwc:if={data.list.showTooltip}>
+                <lightning-helptext
+                    content={data.list.tooltipText}>
+                </lightning-helptext>
+            </template>
+        </div>
+    </template>
+
+    <!-- BASIC -->
+    <template lwc:elseif={data.config.isBasicView}>
+        <div class="slds-grid slds-grid_vertical-align-center">
+            <span class="slds-text-color_success">●</span>
+            <span class="data-label-text-small">
+                {data.basicDisplayStatus}
+            </span>
+        </div>
+    </template>
+
+    <!-- PURCHASE -->
+    <template lwc:elseif={data.config.isPurchaseView}>
+
+        <!-- Current -->
+        <template lwc:if={data.purchase.showCurrent}>
+            <div class="slds-grid slds-p-top_xx-small">
+
+                <template lwc:if={data.purchase.currentRow.showIcon}>
+                    <lightning-icon
+                        icon-name={data.purchase.currentRow.icon}
+                        size="small">
+                    </lightning-icon>
+                </template>
+
+                <c-b2b-badge
+                    status={data.purchase.currentRow.statusLabel}
+                    labels={labels}>
+                </c-b2b-badge>
+
+                <template lwc:if={data.purchase.currentRow.showAvailability}>
+                    <span class="data-label-text-small">
+                        {data.purchase.currentRow.availabilityText}
+                        {labels.Available}
+                    </span>
+                </template>
+
+                <template lwc:if={data.purchase.currentRow.leadTimeText}>
+                    <span class="data-label-text-small">
+                        {data.purchase.currentRow.leadTimeText}
+                    </span>
+                </template>
+            </div>
+        </template>
+
+        <!-- Alternate -->
+        <template lwc:if={data.purchase.showAlternate}>
+            <div class="slds-grid slds-p-top_xx-small">
+
+                <template lwc:if={data.purchase.alternateRow.showIcon}>
+                    <lightning-icon
+                        icon-name={data.purchase.alternateRow.icon}
+                        size="small">
+                    </lightning-icon>
+                </template>
+
+                <c-b2b-badge
+                    status={data.purchase.alternateRow.statusLabel}
+                    labels={labels}>
+                </c-b2b-badge>
+
+                <template lwc:if={data.purchase.alternateRow.showAvailability}>
+                    <span class="data-label-text-small">
+                        {data.purchase.alternateRow.availabilityText}
+                        {labels.Available}
+                    </span>
+                </template>
+
+                <template lwc:if={data.purchase.alternateRow.leadTimeText}>
+                    <span class="data-label-text-small">
+                        {data.purchase.alternateRow.leadTimeText}
+                    </span>
+                </template>
+
+                <template lwc:if={data.purchase.alternateRow.processingText}>
+                    <span class="data-label-text-small">
+                        {data.purchase.alternateRow.processingText}
+                    </span>
+                </template>
+            </div>
+        </template>
+
+    </template>
+
+</template>
+
+
+import { LightningElement, api } from 'lwc';
+import { PageLabelStoreMixin } from 'c/b2bPageLabelStoreMixin';
+import { transformData } from './dataNormalizer';
+import { genUtil, inventoryUtil } from 'c/b2bUtil';
+
+export default class B2BProductInventory extends PageLabelStoreMixin(
+    LightningElement
+) {
+    constructor() {
+        super('b2bProductInventory b2bBadges', true);
+    }
+
+    async connectedCallback() {
+        if (!super.labels || genUtil.isProxyEmpty(super.labels)) {
+            await super.connectedCallback();
+        }
+    }
+
+    _inventory;
+    _displayType;
+    _normalizedData;
+
+    @api
+    set inventory(value) {
+        this._inventory = value;
+        this.computeData();
+    }
+
+    @api
+    set displayType(value) {
+        this._displayType = value;
+        this.computeData();
+    }
+
+    computeData() {
+        this._normalizedData = transformData(
+            this._inventory,
+            this._displayType,
+            inventoryUtil
+        );
+    }
+
+    get data() {
+        return this._normalizedData;
+    }
+}
