@@ -1,17 +1,15 @@
-const hasCurrent = stock.current > 0;
-const hasAlternate = stock.other > 0;
+const currentQty = Number(stock.current) || 0;
+const alternateQty = Number(stock.other) || 0;
 
-let listTooltip = '';
+const parts = [];
 
-if (hasCurrent && hasAlternate) {
-    listTooltip = `${stock.current} parts in your current warehouse. ` +
-                  `${stock.other} parts in your alternate warehouse. ` +
-                  `These will take upto 14 days of additional processing time.`;
-} 
-else if (hasCurrent) {
-    listTooltip = `${stock.current} parts in your current warehouse.`;
-} 
-else if (hasAlternate) {
-    listTooltip = `${stock.other} parts in your alternate warehouse. ` +
-                  `These will take upto 14 days of additional processing time.`;
+if (currentQty > 0) {
+    parts.push(`${currentQty} parts in your current warehouse.`);
 }
+
+if (alternateQty > 0) {
+    parts.push(`${alternateQty} parts in your alternate warehouse.`);
+    parts.push(`These will take upto 14 days of additional processing time.`);
+}
+
+const listTooltip = parts.join(' ');
