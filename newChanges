@@ -1,15 +1,60 @@
-const currentQty = Number(stock.current) || 0;
-const alternateQty = Number(stock.other) || 0;
+// =========================================================
+// ✅ PURCHASE VIEW (CURRENT + ALTERNATE ONLY)
+// =========================================================
 
-const parts = [];
+// ---- STATUS (rename for clarity) ----
+const alternateStatus = inventoryUtil.calculateStatus(
+    inventory.otherWarehouseStatus,
+    stock.other,
+    purchaseLimit,
+    allowBackOrder
+);
 
-if (currentQty > 0) {
-    parts.push(`${currentQty} parts in your current warehouse.`);
-}
+// ---- SUPPRESSION ----
+const suppressCurrent = currentStatus === STATUS.OUT || currentStatus === STATUS.UNAVAILABLE;
+const suppressAlternate = alternateStatus === STATUS.OUT || alternateStatus === STATUS.UNAVAILABLE;
 
-if (alternateQty > 0) {
-    parts.push(`${alternateQty} parts in your alternate warehouse.`);
-    parts.push(`These will take upto 14 days of additional processing time.`);
-}
+// ---- ROW BUILDER ----
+const buildRow = (status, value, lead, suppress) => ({
+    statusLabel: status,
+    availabilityText: suppress ? null : value,
+    leadTimeText: status === STATUS.OUT ? lead : null,
+    showIcon: status !== STATUS.UNAVAILABLE,
+    hideIcon: status === STATUS.UNAVAILABLE,
+    showAvailability: !suppress
+});
 
-const listTooltip = parts.join(' ');
+// ---- ROWS ----
+const currentRow = buildRow(
+    currentStatus,
+    stock.current,
+    currentLead,
+    suppressCurrent
+);
+
+const alternateRow = {
+    ...buildRow(
+        alternateStatus,
+        stock.other,
+        globalLead, // still using same lead source if backend provides it
+        suppressAlternate
+    ),
+    processingText: (alternateStatus === STATUS.IN || alternateStatus === STATUS.LIMITED)
+        ? 'Up to 14 days additional processing time required'
+        : null
+};
+
+// ---- VISIBILITY RULES ----
+// Current → ALWAYS visible
+const showCurrent = true;
+
+// Alternate → ONLY if not unavailable
+const showAlternate = alternateStatus !== STATUS.UNAVAILABLE;
+
+// ---- FINAL OBJECT ----
+const purchase = {
+    showCurrent,
+    showGlobal: showAlternate,   // keep name for HTML compatibility
+    currentRow,
+    globalRow: alternateRow     // reuse key to avoid HTML change
+};
