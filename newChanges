@@ -5,71 +5,264 @@ const STATUS = {
     UNAVAILABLE: 'Unavailable'
 };
 
-// ---- STATUS ----
-const currentStatus = inventoryUtil.calculateStatus(
-    inventory.currentWarehouseStatus,
-    stock.current,
-    purchaseLimit,
-    allowBackOrder
-);
-
-const alternateStatus = inventoryUtil.calculateStatus(
-    inventory.otherWarehouseStatus,
-    stock.other,
-    purchaseLimit,
-    allowBackOrder
-);
-
-// ---- HELPERS ----
-const isOut = s => s === STATUS.OUT;
-const isUnavailable = s => s === STATUS.UNAVAILABLE;
-const isInOrLimited = s => s === STATUS.IN || s === STATUS.LIMITED;
-
-// ---- SUPPRESSION ----
-const suppressCurrent = isOut(currentStatus) || isUnavailable(currentStatus);
-const suppressAlternate = isOut(alternateStatus) || isUnavailable(alternateStatus);
-
-// ---- ROW BUILDER ----
-const buildRow = (status, value, lead, suppress, isAlternate = false) => ({
-    statusLabel: status,
-    availabilityText: suppress ? null : value,
-
-    // ✅ Current → dynamic lead time
-    // ❌ Alternate → no lead time
-    leadTimeText: !isAlternate && isOut(status) ? lead : null,
-
-    // ✅ Alternate → static processing text
-    processingText: isAlternate && isInOrLimited(status)
-        ? 'Up to 14 days additional processing time required'
-        : null,
-
-    showIcon: status !== STATUS.UNAVAILABLE,
-    hideIcon: status === STATUS.UNAVAILABLE,
-    showAvailability: !suppress
-});
-
-// ---- ROWS ----
-const currentRow = buildRow(
-    currentStatus,
-    stock.current,
-    currentLead,
-    suppressCurrent,
-    false
-);
-
-const alternateRow = buildRow(
-    alternateStatus,
-    stock.other,
-    null, // no lead time
-    suppressAlternate,
-    true
-);
-
-// ---- VISIBILITY ----
-const purchase = {
-    showCurrent: true,
-    showAlternate: alternateStatus !== STATUS.UNAVAILABLE,
-
-    currentRow,
-    alternateRow
+const DISPLAY_TYPES = {
+    LIST: 'list',
+    PURCHASE: 'purchase',
+    BASIC: 'basic'
 };
+
+export function transformData(inventory, displayType = DISPLAY_TYPES.BASIC, inventoryUtil) {
+
+    if (!inventory) return createEmpty();
+
+    const config = getConfig(displayType);
+
+    // ---- STOCK ----
+    const stock = {
+        current: Number(inventory.currentWarehouseInventory) || 0,
+        other: Number(inventory.otherWarehouseInventory) || 0,
+        global: Number(inventory.globalWarehouseInventory) || 0
+    };
+
+    const purchaseLimit = Number(inventory.purchaseLimit) || 0;
+    const allowBackOrder = inventory.allowBackOrder ?? true;
+
+    const currentLead = formatLead(inventory.currentWarehouseLeadTime);
+    const globalLead = formatLead(inventory.globalWarehouseLeadTime);
+
+    // ---- STATUS ----
+    const currentStatus = inventoryUtil.calculateStatus(
+        inventory.currentWarehouseStatus,
+        stock.current,
+        purchaseLimit,
+        allowBackOrder
+    );
+
+    const alternateStatus = inventoryUtil.calculateStatus(
+        inventory.otherWarehouseStatus,
+        stock.other,
+        purchaseLimit,
+        allowBackOrder
+    );
+
+    const globalStatus = inventoryUtil.calculateStatus(
+        inventory.otherWarehouseStatus,
+        stock.global,
+        purchaseLimit,
+        allowBackOrder
+    );
+
+    const isOut = s => s === STATUS.OUT;
+    const isUnavailable = s => s === STATUS.UNAVAILABLE;
+    const isInOrLimited = s => s === STATUS.IN || s === STATUS.LIMITED;
+
+    // =========================================================
+    // ✅ LIST VIEW (GLOBAL DISPLAY + TOOLTIP FROM CURRENT/OTHER)
+    // =========================================================
+
+    const currentQty = Number(stock.current) || 0;
+    const alternateQty = Number(stock.other) || 0;
+
+    const tooltipParts = [];
+
+    if (currentQty > 0) {
+        tooltipParts.push(`${currentQty} parts in your current warehouse.`);
+    }
+
+    if (alternateQty > 0) {
+        tooltipParts.push(`${alternateQty} parts in your alternate warehouse.`);
+        tooltipParts.push(`These will take upto 14 days of additional processing time.`);
+    }
+
+    const list = {
+        singleStatus: globalStatus,
+        summedGlobalAvailability: globalStatus === STATUS.UNAVAILABLE ? 0 : stock.global,
+        tooltipText: tooltipParts.join('<br/><br/>'),
+        leadTimeText: globalStatus === STATUS.OUT ? globalLead : null,
+        showAvailability: isInOrLimited(globalStatus),
+        showLeadTime: globalStatus === STATUS.OUT && !!globalLead,
+        showTooltip: tooltipParts.length > 0
+    };
+
+    // =========================================================
+    // ✅ PURCHASE VIEW (CURRENT + ALTERNATE ONLY)
+    // =========================================================
+
+    const suppressCurrent = isOut(currentStatus) || isUnavailable(currentStatus);
+    const suppressAlternate = isOut(alternateStatus) || isUnavailable(alternateStatus);
+
+    const buildRow = (status, value, lead, suppress, isAlternate = false) => ({
+        statusLabel: status,
+        availabilityText: suppress ? null : value,
+
+        // only for current
+        leadTimeText: !isAlternate && isOut(status) ? lead : null,
+
+        // only for alternate
+        processingText: isAlternate && isInOrLimited(status)
+            ? 'Up to 14 days additional processing time required'
+            : null,
+
+        showIcon: status !== STATUS.UNAVAILABLE,
+        hideIcon: status === STATUS.UNAVAILABLE,
+        showAvailability: !suppress
+    });
+
+    const purchase = {
+        showCurrent: true,
+        showAlternate: alternateStatus !== STATUS.UNAVAILABLE,
+
+        currentRow: buildRow(currentStatus, stock.current, currentLead, suppressCurrent, false),
+        alternateRow: buildRow(alternateStatus, stock.other, null, suppressAlternate, true)
+    };
+
+    // =========================================================
+    // BASIC VIEW
+    // =========================================================
+
+    const basicDisplayStatus = displayType === DISPLAY_TYPES.BASIC
+        ? inventoryUtil.determineBasicDisplayStatus(currentStatus, globalStatus)
+        : null;
+
+    return {
+        config,
+        list,
+        purchase,
+        basicDisplayStatus,
+
+        productId: inventory.productId || null,
+        productSku: inventory.productSku || null
+    };
+}
+
+// =========================================================
+// HELPERS
+// =========================================================
+
+function getConfig(type) {
+    switch ((type || '').toLowerCase()) {
+        case DISPLAY_TYPES.LIST:
+            return { isListView: true };
+        case DISPLAY_TYPES.PURCHASE:
+            return { isPurchaseView: true };
+        default:
+            return { isBasicView: true };
+    }
+}
+
+function formatLead(val) {
+    if (val == null || val === 'null') return null;
+    const days = Number(val);
+    if (isNaN(days)) return null;
+    return `Lead time up to ${days} business day${days !== 1 ? 's' : ''}`;
+}
+
+function createEmpty() {
+    return {
+        config: { isBasicView: true },
+        list: {},
+        purchase: {},
+        basicDisplayStatus: STATUS.IN
+    };
+}
+
+export { DISPLAY_TYPES };
+
+<template>
+
+    <!-- ===================== -->
+    <!-- LIST VIEW -->
+    <!-- ===================== -->
+    <template lwc:if={data.config.isListView}>
+        <div class="slds-grid slds-p-top_xx-small">
+
+            <c-b2b-badge status={data.list.singleStatus} labels={labels}></c-b2b-badge>
+
+            <template lwc:if={data.list.showLeadTime}>
+                <span class="data-label-text-small slds-p-left_small">
+                    {data.list.leadTimeText}
+                </span>
+            </template>
+
+            <template lwc:if={data.list.showAvailability}>
+                <span class="data-label-text-small slds-p-left_small">
+                    {data.list.summedGlobalAvailability} {labels.Available}
+                </span>
+            </template>
+
+            <template lwc:if={data.list.showTooltip}>
+                <div class="slds-m-left_small">
+                    <lightning-formatted-rich-text value={data.list.tooltipText}>
+                    </lightning-formatted-rich-text>
+                </div>
+            </template>
+
+        </div>
+    </template>
+
+    <!-- ===================== -->
+    <!-- BASIC VIEW -->
+    <!-- ===================== -->
+    <template lwc:elseif={data.config.isBasicView}>
+        <div class="slds-grid slds-align-items-center">
+            <span class="slds-text-color_success">●</span>
+            <span class="data-label-text-small slds-p-left_x-small">
+                {data.basicDisplayStatus}
+            </span>
+        </div>
+    </template>
+
+    <!-- ===================== -->
+    <!-- PURCHASE VIEW -->
+    <!-- ===================== -->
+    <template lwc:elseif={data.config.isPurchaseView}>
+
+        <!-- CURRENT -->
+        <template lwc:if={data.purchase.showCurrent}>
+            <div class="slds-grid slds-p-top_xx-small">
+
+                <lightning-icon icon-name="utility:home" size="small"></lightning-icon>
+
+                <c-b2b-badge status={data.purchase.currentRow.statusLabel} labels={labels}></c-b2b-badge>
+
+                <template lwc:if={data.purchase.currentRow.showAvailability}>
+                    <span class="data-label-text-small slds-p-left_small">
+                        {data.purchase.currentRow.availabilityText} {labels.Available}
+                    </span>
+                </template>
+
+                <template lwc:if={data.purchase.currentRow.leadTimeText}>
+                    <span class="data-label-text-small slds-p-left_small">
+                        {data.purchase.currentRow.leadTimeText}
+                    </span>
+                </template>
+
+            </div>
+        </template>
+
+        <!-- ALTERNATE -->
+        <template lwc:if={data.purchase.showAlternate}>
+            <div class="slds-grid slds-p-top_xx-small">
+
+                <lightning-icon icon-name="utility:world" size="small"></lightning-icon>
+
+                <c-b2b-badge status={data.purchase.alternateRow.statusLabel} labels={labels}></c-b2b-badge>
+
+                <template lwc:if={data.purchase.alternateRow.showAvailability}>
+                    <span class="data-label-text-small slds-p-left_small">
+                        {data.purchase.alternateRow.availabilityText} {labels.Available}
+                    </span>
+                </template>
+
+                <template lwc:if={data.purchase.alternateRow.processingText}>
+                    <span class="data-label-text-small slds-p-left_small">
+                        ({data.purchase.alternateRow.processingText})
+                    </span>
+                </template>
+
+            </div>
+        </template>
+
+    </template>
+
+</template>
