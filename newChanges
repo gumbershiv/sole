@@ -1,8 +1,18 @@
-// =========================================================
-// ✅ PURCHASE VIEW (CURRENT + ALTERNATE ONLY)
-// =========================================================
+const STATUS = {
+    IN: 'In Stock',
+    LIMITED: 'Limited stock',
+    OUT: 'Out of stock',
+    UNAVAILABLE: 'Unavailable'
+};
 
-// ---- STATUS (rename for clarity) ----
+// ---- STATUS ----
+const currentStatus = inventoryUtil.calculateStatus(
+    inventory.currentWarehouseStatus,
+    stock.current,
+    purchaseLimit,
+    allowBackOrder
+);
+
 const alternateStatus = inventoryUtil.calculateStatus(
     inventory.otherWarehouseStatus,
     stock.other,
@@ -10,15 +20,29 @@ const alternateStatus = inventoryUtil.calculateStatus(
     allowBackOrder
 );
 
+// ---- HELPERS ----
+const isOut = s => s === STATUS.OUT;
+const isUnavailable = s => s === STATUS.UNAVAILABLE;
+const isInOrLimited = s => s === STATUS.IN || s === STATUS.LIMITED;
+
 // ---- SUPPRESSION ----
-const suppressCurrent = currentStatus === STATUS.OUT || currentStatus === STATUS.UNAVAILABLE;
-const suppressAlternate = alternateStatus === STATUS.OUT || alternateStatus === STATUS.UNAVAILABLE;
+const suppressCurrent = isOut(currentStatus) || isUnavailable(currentStatus);
+const suppressAlternate = isOut(alternateStatus) || isUnavailable(alternateStatus);
 
 // ---- ROW BUILDER ----
-const buildRow = (status, value, lead, suppress) => ({
+const buildRow = (status, value, lead, suppress, isAlternate = false) => ({
     statusLabel: status,
     availabilityText: suppress ? null : value,
-    leadTimeText: status === STATUS.OUT ? lead : null,
+
+    // ✅ Current → dynamic lead time
+    // ❌ Alternate → no lead time
+    leadTimeText: !isAlternate && isOut(status) ? lead : null,
+
+    // ✅ Alternate → static processing text
+    processingText: isAlternate && isInOrLimited(status)
+        ? 'Up to 14 days additional processing time required'
+        : null,
+
     showIcon: status !== STATUS.UNAVAILABLE,
     hideIcon: status === STATUS.UNAVAILABLE,
     showAvailability: !suppress
@@ -29,32 +53,23 @@ const currentRow = buildRow(
     currentStatus,
     stock.current,
     currentLead,
-    suppressCurrent
+    suppressCurrent,
+    false
 );
 
-const alternateRow = {
-    ...buildRow(
-        alternateStatus,
-        stock.other,
-        globalLead, // still using same lead source if backend provides it
-        suppressAlternate
-    ),
-    processingText: (alternateStatus === STATUS.IN || alternateStatus === STATUS.LIMITED)
-        ? 'Up to 14 days additional processing time required'
-        : null
-};
+const alternateRow = buildRow(
+    alternateStatus,
+    stock.other,
+    null, // no lead time
+    suppressAlternate,
+    true
+);
 
-// ---- VISIBILITY RULES ----
-// Current → ALWAYS visible
-const showCurrent = true;
-
-// Alternate → ONLY if not unavailable
-const showAlternate = alternateStatus !== STATUS.UNAVAILABLE;
-
-// ---- FINAL OBJECT ----
+// ---- VISIBILITY ----
 const purchase = {
-    showCurrent,
-    showGlobal: showAlternate,   // keep name for HTML compatibility
+    showCurrent: true,
+    showAlternate: alternateStatus !== STATUS.UNAVAILABLE,
+
     currentRow,
-    globalRow: alternateRow     // reuse key to avoid HTML change
+    alternateRow
 };
