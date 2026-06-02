@@ -1,171 +1,126 @@
 public static B2BActionResponse getSalesOfficeWarehouse(Boolean returnList) {
-        try {
-            // First attempt: use session information (if present)
-            B2BSessionInformation sessionInfo = B2BUtil.getSessionInformation();
-            String salesOfficeCode;
-            String warehouseCode;
-            String effAccountId = sessionInfo.effectiveAccountId != null ? sessionInfo.effectiveAccountId : null;
-            
-            if(returnList){
-                Account acc = [
-                    SELECT cc_ST_Sales_Office__c
-                    FROM Account
-                    WHERE Id = :effAccountId
-                    LIMIT 1
-                ];
-                
-                // Validate that account has sales offices configured
-                if (String.isBlank(acc.cc_ST_Sales_Office__c)) {
-                    return new B2BActionResponse(false,
-                                                 'No sales offices configured for this account', null);
-                }
-                
-                // get salesoffice from  cc_ST_Sales_Office__c field
-                List<String> salesOffices = acc.cc_ST_Sales_Office__c.split(';');
-                
-                // Get warehouse data from metadata
-                Map<String, B2B_SalesOfficeAddress__mdt> allMetadata = B2B_SalesOfficeAddress__mdt.getAll();
-                
-                List<B2B_SalesOfficeAddress__mdt> metadataRecords = new List<B2B_SalesOfficeAddress__mdt>();
-                
-                //Filter to only include metadata for this account's sales offices
-                for (B2B_SalesOfficeAddress__mdt rec : allMetadata.values()) {
-                    // Check if this metadata record's sales office is in our account's list
-                    if (!String.isBlank(rec.SalesOfficeCode__c) &&
-                        salesOffices.contains(rec.SalesOfficeCode__c)) {
-                            
-                            metadataRecords.add(rec);
-                        }
-                }
-                
-                // Validate that we found metadata for salesoffice
-                if (metadataRecords.isEmpty()) {
-                    return new B2BActionResponse(false,'No warehouse metadata found', null);
-                }
-                
-                /**
-* warehouseMap: Stores unique warehouses
-* KEY: Warehouse Code
-* VALUE: WarehouseInfo object containing all warehouse details
-*/
-                Map<String, WarehouseInfo> warehouseMap = new Map<String, WarehouseInfo>();
-                
-                /**
-* salesOfficeMap: Stores sales office metadata
-* KEY: Sales Office Code
-* VALUE: B2B_SalesOfficeAddress__mdt object containing all sales office details
-*/
-                Map<String, B2B_SalesOfficeAddress__mdt> salesOfficeMap = new Map<String, B2B_SalesOfficeAddress__mdt>();
-                
-                // Loop through metadata and populate both maps
-                for (B2B_SalesOfficeAddress__mdt mdt : metadataRecords) {
-                    // Always add to salesOfficeMap (for Contact lookup)
-                    salesOfficeMap.put(mdt.SalesOfficeCode__c, mdt);
-                    
-                    if (!warehouseMap.containsKey(mdt.WarehouseCode__c)) {
-                        warehouseMap.put(mdt.WarehouseCode__c,
-                                         new WarehouseInfo(
-                                             mdt.WarehouseCode__c,
-                                             getCountryName(mdt.WarehouseCountryCode__c),
-                                             mdt.WarehouseCountryCode__c,
-                                             mdt.WarehouseAddress__c,
-                                             mdt.SalesOfficeCode__c
-                                         )
-                                        );
-                    }
-                }
-                
-                List<WarehouseInfo> warehouses = warehouseMap.values();
-                
-                // Get current warehouse from current user's contact
-                WarehouseInfo currentWarehouse = getCurrentWarehouseForContact(
-                    metadataRecords,
-                    salesOfficeMap
-                );
-                
-                // If user has no warehouse selected, default to the first one
-                if (currentWarehouse == null && !metadataRecords.isEmpty()) {
-                    
-                    B2B_SalesOfficeAddress__mdt first = metadataRecords[0];
-                    
-                    currentWarehouse = new WarehouseInfo(
-                        first.WarehouseCode__c,
-                        getCountryName(first.WarehouseCountryCode__c),
-                        first.WarehouseCountryCode__c,
-                        first.WarehouseAddress__c,
-                        first.SalesOfficeCode__c
-                    );
-                }
-                
-                // Return response with all available warehouses, current warehouse and boolean hasMultipleWarehouses
-                WarehouseDataWrapper wrapper = new WarehouseDataWrapper(
-                    warehouses,
-                    currentWarehouse,
-                    warehouses.size() > 1
-                );
-                
-                return new B2BActionResponse(true, 'Success', wrapper);
+    try {
+
+        B2BSessionInformation sessionInfo = B2BUtil.getSessionInformation();
+
+        /* =====================================================
+           ✅ CASE 1: RETURN LIST (FROM ACCOUNT)
+        ===================================================== */
+        if (returnList) {
+
+            if (sessionInfo == null || sessionInfo.effectiveAccountId == null) {
+                return new B2BActionResponse(false, 'No account available in session', null);
             }
 
-            if (sessionInfo != null) {
-                salesOfficeCode = sessionInfo.salesOfficeCode;
-                warehouseCode = sessionInfo.warehouseCode;
-            } else {
-                // Fallback: Single SOQL - fetch User and related Contact fields
-                User u = [SELECT Id, Contact.Id, Contact.B2B_SalesofficeSelected__c, Contact.B2B_WarehouseCodeSelected__c
-                          FROM User
-                          WHERE Id = :UserInfo.getUserId()
-                          LIMIT 1];
-                if (u == null || u.Contact == null) {
-                    return new B2BActionResponse(false, 'No Contact associated with current user', null);
-                }
-                
-                salesOfficeCode = (String) u.Contact.get('B2B_SalesofficeSelected__c');
-                warehouseCode = (String) u.Contact.get('B2B_WarehouseCodeSelected__c');
+            Account acc = [
+                SELECT cc_ST_Sales_Office__c
+                FROM Account
+                WHERE Id = :sessionInfo.effectiveAccountId
+                LIMIT 1
+            ];
+
+            if (String.isBlank(acc.cc_ST_Sales_Office__c)) {
+                return new B2BActionResponse(false, 'No sales offices configured for this account', null);
             }
 
-            if (String.isBlank(salesOfficeCode) && String.isBlank(warehouseCode)) {
-                return new B2BActionResponse(false, 'No sales office or warehouse code found for current user', null);
-            }
+            List<String> salesOffices = acc.cc_ST_Sales_Office__c.split(';');
 
-            // Load custom metadata once
             Map<String, B2B_SalesOfficeAddress__mdt> metaAll = B2B_SalesOfficeAddress__mdt.getAll();
 
-            B2B_SalesOfficeAddress__mdt matched = null;
-            // Try exact match first (match by salesOfficeCode when available)
-            if (!String.isBlank(salesOfficeCode) && !String.isBlank(warehouseCode)) {
-                for (B2B_SalesOfficeAddress__mdt m : metaAll.values()) {
-                    if (salesOfficeCode == m.SalesOfficeCode__c) {
-                        matched = m;
-                        break;
-                    }
-                }
-            }
-            // Fallback to single-field match on salesOfficeCode
-            if (matched == null && !String.isBlank(salesOfficeCode)) {
-                for (B2B_SalesOfficeAddress__mdt m : metaAll.values()) {
-                    if (salesOfficeCode == m.SalesOfficeCode__c) {
-                        matched = m;
-                        break;
-                    }
+            List<WarehouseInfo> warehouses = new List<WarehouseInfo>();
+
+            for (B2B_SalesOfficeAddress__mdt mdt : metaAll.values()) {
+
+                if (!String.isBlank(mdt.SalesOfficeCode__c) &&
+                    salesOffices.contains(mdt.SalesOfficeCode__c)) {
+
+                    warehouses.add(new WarehouseInfo(
+                        mdt.WarehouseCode__c,
+                        getCountryName(mdt.WarehouseCountryCode__c),
+                        mdt.WarehouseCountryCode__c,
+                        mdt.WarehouseAddress__c,
+                        mdt.SalesOfficeCode__c
+                    ));
                 }
             }
 
-            String warehouseCountry = null;
-            if (matched != null) {
-                // safe access to custom metadata field
-                warehouseCountry = B2BUtil.getCountryName((String) matched.get('WarehouseCountryCode__c'));
+            if (warehouses.isEmpty()) {
+                return new B2BActionResponse(false, 'No warehouse metadata found', null);
             }
-            
-            Map<String, Object> wrapper = new Map<String, Object>{
-                'salesOfficeCode' => salesOfficeCode,
-                'warehouseCode' => warehouseCode,
-                'country' => warehouseCountry
-            };
 
-            String message = matched != null ? 'Found metadata match' : 'No matching metadata found; returning codes from session/Contact';
-            return new B2BActionResponse(true, message, wrapper);
-        } catch (Exception e) {
-            return new B2BActionResponse(false, 'Error retrieving sales office/warehouse data: ' + e.getMessage(), null);
+            WarehouseDataWrapper wrapper = new WarehouseDataWrapper(
+                warehouses,
+                warehouses[0], // default current
+                warehouses.size() > 1
+            );
+
+            return new B2BActionResponse(true, 'Success', wrapper);
         }
+
+        /* =====================================================
+           ✅ CASE 2: SINGLE VALUE (SESSION → CONTACT)
+        ===================================================== */
+
+        String salesOfficeCode;
+        String warehouseCode;
+
+        // Prefer session
+        if (sessionInfo != null &&
+            (!String.isBlank(sessionInfo.salesOfficeCode) ||
+             !String.isBlank(sessionInfo.warehouseCode))) {
+
+            salesOfficeCode = sessionInfo.salesOfficeCode;
+            warehouseCode = sessionInfo.warehouseCode;
+
+        } else {
+
+            User u = [
+                SELECT Contact.B2B_SalesofficeSelected__c,
+                       Contact.B2B_WarehouseCodeSelected__c
+                FROM User
+                WHERE Id = :UserInfo.getUserId()
+                LIMIT 1
+            ];
+
+            if (u.Contact == null) {
+                return new B2BActionResponse(false, 'No Contact associated with current user', null);
+            }
+
+            salesOfficeCode = u.Contact.B2B_SalesofficeSelected__c;
+            warehouseCode = u.Contact.B2B_WarehouseCodeSelected__c;
+        }
+
+        if (String.isBlank(salesOfficeCode) && String.isBlank(warehouseCode)) {
+            return new B2BActionResponse(false, 'No sales office or warehouse found', null);
+        }
+
+        /* =====================================================
+           ✅ FETCH COUNTRY FROM METADATA
+        ===================================================== */
+
+        Map<String, B2B_SalesOfficeAddress__mdt> metaAll = B2B_SalesOfficeAddress__mdt.getAll();
+
+        String country;
+
+        for (B2B_SalesOfficeAddress__mdt m : metaAll.values()) {
+            if (salesOfficeCode == m.SalesOfficeCode__c) {
+                country = B2BUtil.getCountryName(m.WarehouseCountryCode__c);
+                break;
+            }
+        }
+
+        Map<String, Object> wrapper = new Map<String, Object>{
+            'salesOfficeCode' => salesOfficeCode,
+            'warehouseCode'   => warehouseCode,
+            'country'         => country
+        };
+
+        return new B2BActionResponse(true, 'Success', wrapper);
+
+    } catch (Exception e) {
+        return new B2BActionResponse(false,
+            'Error retrieving sales office/warehouse data: ' + e.getMessage(),
+            null
+        );
     }
+}
