@@ -1,126 +1,266 @@
 public static B2BActionResponse getSalesOfficeWarehouse(Boolean returnList) {
-    try {
-
-        B2BSessionInformation sessionInfo = B2BUtil.getSessionInformation();
-
-        /* =====================================================
-           ✅ CASE 1: RETURN LIST (FROM ACCOUNT)
-        ===================================================== */
-        if (returnList) {
-
-            if (sessionInfo == null || sessionInfo.effectiveAccountId == null) {
-                return new B2BActionResponse(false, 'No account available in session', null);
+        try {
+            
+            B2BSessionInformation sessionInfo = B2BUtil.getSessionInformation();
+            
+            /* =====================================================
+               CASE 1: RETURN LIST (FROM ACCOUNT)
+			===================================================== */
+            if (returnList) {
+                
+                if (sessionInfo == null || sessionInfo.effectiveAccountId == null) {
+                    return new B2BActionResponse(false, 'No account available in session', null);
+                }
+                
+                Account acc = [
+                    SELECT cc_ST_Sales_Office__c
+                    FROM Account
+                    WHERE Id = :sessionInfo.effectiveAccountId
+                    LIMIT 1
+                ];
+                
+                if (String.isBlank(acc.cc_ST_Sales_Office__c)) {
+                    return new B2BActionResponse(false, 'No sales offices configured for this account', null);
+                }
+                
+                List<String> salesOffices = acc.cc_ST_Sales_Office__c.split(';');
+                
+                Map<String, B2B_SalesOfficeAddress__mdt> metaAll = B2B_SalesOfficeAddress__mdt.getAll();
+                
+                List<WarehouseInfo> warehouses = new List<WarehouseInfo>();
+                
+                for (B2B_SalesOfficeAddress__mdt mdt : metaAll.values()) {
+                    
+                    if (!String.isBlank(mdt.SalesOfficeCode__c) &&
+                        salesOffices.contains(mdt.SalesOfficeCode__c)) {
+                            
+                            warehouses.add(new WarehouseInfo(
+                                mdt.WarehouseCode__c,
+                                getCountryName(mdt.WarehouseCountryCode__c),
+                                mdt.WarehouseCountryCode__c,
+                                mdt.WarehouseAddress__c,
+                                mdt.SalesOfficeCode__c
+                            ));
+                        }
+                }
+                
+                if (warehouses.isEmpty()) {
+                    return new B2BActionResponse(false, 'No warehouse metadata found', null);
+                }
+                
+                WarehouseDataWrapper wrapper = new WarehouseDataWrapper(
+                    warehouses,
+                    warehouses[0], // default current
+                    warehouses.size() > 1
+                );
+                
+                return new B2BActionResponse(true, 'Success', wrapper);
             }
-
-            Account acc = [
-                SELECT cc_ST_Sales_Office__c
-                FROM Account
-                WHERE Id = :sessionInfo.effectiveAccountId
-                LIMIT 1
-            ];
-
-            if (String.isBlank(acc.cc_ST_Sales_Office__c)) {
-                return new B2BActionResponse(false, 'No sales offices configured for this account', null);
+            
+            /* =====================================================
+✅ CASE 2: SINGLE VALUE (SESSION → CONTACT)
+===================================================== */
+            
+            String salesOfficeCode;
+            String warehouseCode;
+            
+            // Prefer session
+            if (sessionInfo != null &&
+                (!String.isBlank(sessionInfo.salesOfficeCode) ||
+                 !String.isBlank(sessionInfo.warehouseCode))) {
+                     
+                     salesOfficeCode = sessionInfo.salesOfficeCode;
+                     warehouseCode = sessionInfo.warehouseCode;
+                     
+                 } else {
+                     
+                     User u = [
+                         SELECT Contact.B2B_SalesofficeSelected__c,
+                         Contact.B2B_WarehouseCodeSelected__c
+                         FROM User
+                         WHERE Id = :UserInfo.getUserId()
+                         LIMIT 1
+                     ];
+                     
+                     if (u.Contact == null) {
+                         return new B2BActionResponse(false, 'No Contact associated with current user', null);
+                     }
+                     
+                     salesOfficeCode = u.Contact.B2B_SalesofficeSelected__c;
+                     warehouseCode = u.Contact.B2B_WarehouseCodeSelected__c;
+                 }
+            
+            if (String.isBlank(salesOfficeCode) && String.isBlank(warehouseCode)) {
+                return new B2BActionResponse(false, 'No sales office or warehouse found', null);
             }
-
-            List<String> salesOffices = acc.cc_ST_Sales_Office__c.split(';');
-
+            
+            /* =====================================================
+✅ FETCH COUNTRY FROM METADATA
+===================================================== */
+            
             Map<String, B2B_SalesOfficeAddress__mdt> metaAll = B2B_SalesOfficeAddress__mdt.getAll();
-
-            List<WarehouseInfo> warehouses = new List<WarehouseInfo>();
-
-            for (B2B_SalesOfficeAddress__mdt mdt : metaAll.values()) {
-
-                if (!String.isBlank(mdt.SalesOfficeCode__c) &&
-                    salesOffices.contains(mdt.SalesOfficeCode__c)) {
-
-                    warehouses.add(new WarehouseInfo(
-                        mdt.WarehouseCode__c,
-                        getCountryName(mdt.WarehouseCountryCode__c),
-                        mdt.WarehouseCountryCode__c,
-                        mdt.WarehouseAddress__c,
-                        mdt.SalesOfficeCode__c
-                    ));
+            
+            String country;
+            
+            for (B2B_SalesOfficeAddress__mdt m : metaAll.values()) {
+                if (salesOfficeCode == m.SalesOfficeCode__c) {
+                    country = B2BUtil.getCountryName(m.WarehouseCountryCode__c);
+                    break;
                 }
             }
-
-            if (warehouses.isEmpty()) {
-                return new B2BActionResponse(false, 'No warehouse metadata found', null);
-            }
-
-            WarehouseDataWrapper wrapper = new WarehouseDataWrapper(
-                warehouses,
-                warehouses[0], // default current
-                warehouses.size() > 1
-            );
-
-            return new B2BActionResponse(true, 'Success', wrapper);
+            
+            Map<String, Object> wrapper = new Map<String, Object>{
+                'salesOfficeCode' => salesOfficeCode,
+                    'warehouseCode'   => warehouseCode,
+                    'country'         => country
+                    };
+                        
+                        return new B2BActionResponse(true, 'Success', wrapper);
+            
+        } catch (Exception e) {
+            return new B2BActionResponse(false,
+                                         'Error retrieving sales office/warehouse data: ' + e.getMessage(),
+                                         null
+                                        );
         }
-
-        /* =====================================================
-           ✅ CASE 2: SINGLE VALUE (SESSION → CONTACT)
-        ===================================================== */
-
-        String salesOfficeCode;
-        String warehouseCode;
-
-        // Prefer session
-        if (sessionInfo != null &&
-            (!String.isBlank(sessionInfo.salesOfficeCode) ||
-             !String.isBlank(sessionInfo.warehouseCode))) {
-
-            salesOfficeCode = sessionInfo.salesOfficeCode;
-            warehouseCode = sessionInfo.warehouseCode;
-
-        } else {
-
-            User u = [
-                SELECT Contact.B2B_SalesofficeSelected__c,
-                       Contact.B2B_WarehouseCodeSelected__c
-                FROM User
-                WHERE Id = :UserInfo.getUserId()
-                LIMIT 1
-            ];
-
-            if (u.Contact == null) {
-                return new B2BActionResponse(false, 'No Contact associated with current user', null);
-            }
-
-            salesOfficeCode = u.Contact.B2B_SalesofficeSelected__c;
-            warehouseCode = u.Contact.B2B_WarehouseCodeSelected__c;
-        }
-
-        if (String.isBlank(salesOfficeCode) && String.isBlank(warehouseCode)) {
-            return new B2BActionResponse(false, 'No sales office or warehouse found', null);
-        }
-
-        /* =====================================================
-           ✅ FETCH COUNTRY FROM METADATA
-        ===================================================== */
-
-        Map<String, B2B_SalesOfficeAddress__mdt> metaAll = B2B_SalesOfficeAddress__mdt.getAll();
-
-        String country;
-
-        for (B2B_SalesOfficeAddress__mdt m : metaAll.values()) {
-            if (salesOfficeCode == m.SalesOfficeCode__c) {
-                country = B2BUtil.getCountryName(m.WarehouseCountryCode__c);
-                break;
-            }
-        }
-
-        Map<String, Object> wrapper = new Map<String, Object>{
-            'salesOfficeCode' => salesOfficeCode,
-            'warehouseCode'   => warehouseCode,
-            'country'         => country
-        };
-
-        return new B2BActionResponse(true, 'Success', wrapper);
-
-    } catch (Exception e) {
-        return new B2BActionResponse(false,
-            'Error retrieving sales office/warehouse data: ' + e.getMessage(),
-            null
-        );
     }
-}
+    
+    /**
+     * Update the current user's Contact with warehouse and salesOffice codes and also update the session cache.
+     * This method updates Contact.Warehouse_Code__c and Contact.Sales_Office_Code__c (falling back to B2B_SalesofficeSelected__c /
+     * B2B_WarehouseCodeSelected__c if the explicit fields are not present), and writes the same values to the platform
+     * session tracker and persistentSessionData.
+     *
+     * @param warehouseCode  string code to set on Contact and session
+     * @param salesOfficeCode string code to set on Contact and session
+     */
+    public static void updateContactAndSession(String warehouseCode, String salesOfficeCode) {
+        // Normalize empty to null
+        if (String.isBlank(warehouseCode)) warehouseCode = null;
+        if (String.isBlank(salesOfficeCode)) salesOfficeCode = null;
+
+        // Fetch current user (ContactId and Account) in one query
+        User u = [SELECT Id, ContactId, AccountId, Account.Distributor__c FROM User WHERE Id = :UserInfo.getUserId() LIMIT 1];
+
+        // Update session regardless — build or update session with provided values
+        B2BSessionInformation current = B2BUtil.getSessionInformation();
+        if (current == null) {
+            // If no session exists, create a minimal session using AccountId (can be null) and provided codes
+            String effectiveAccount = u != null ? u.AccountId : null;
+            // Use existing helper to persist session 
+            saveSessionInfoToPlatformSessionCache(effectiveAccount, false, warehouseCode, salesOfficeCode);
+        } else {
+            // Reuse existing save method to preserve other fields where possible
+            saveSessionInfoToPlatformSessionCache(
+                current.effectiveAccountId,
+                current.isDistributor,
+                current.distributorAction != null ? current.distributorAction.toString() : null,
+                current.distributorParentAccount,
+                current.isPunchout,
+                current.punchoutConfigurationName,
+                UserInfo.getUserId(),
+                warehouseCode,
+                salesOfficeCode
+            );
+        }
+
+        // If Contact is available, update Contact fields; otherwise stop (session-only update already done)
+        if (u == null || String.isBlank(u.ContactId)) {
+            return;
+        }
+
+        // Prepare Contact update using field map to avoid multiple describes
+        Contact c = new Contact(Id = u.ContactId);
+        Map<String, Schema.SObjectField> contactFields = Contact.SObjectType.getDescribe().fields.getMap();
+
+        if (contactFields.containsKey('Sales_Office_Code__c')) {
+            c.put('Sales_Office_Code__c', salesOfficeCode);
+        } else if (contactFields.containsKey('B2B_SalesofficeSelected__c')) {
+            c.put('B2B_SalesofficeSelected__c', salesOfficeCode);
+        }
+
+        if (contactFields.containsKey('Warehouse_Code__c')) {
+            c.put('Warehouse_Code__c', warehouseCode);
+        } else if (contactFields.containsKey('B2B_WarehouseCodeSelected__c')) {
+            c.put('B2B_WarehouseCodeSelected__c', warehouseCode);
+        }
+
+        // If there are no fields to update, return early
+        if (c.getSObjectType() == null || (c.getPopulatedFieldsAsMap().isEmpty())) {
+            return;
+        }
+
+        // Best-effort DML; allow callers to continue even if update fails
+        try {
+            update c;
+        } catch (DmlException dmle) {
+            // Log exception so failures are visible in logs but do not break caller flows
+            try {
+                B2BLoggingUtil.error('general_logger', 'B2BUtil', 'updateContactAndSession', 0,
+                    'Failed to update Contact: ' + dmle.getMessage(), dmle.getStackTraceString());
+            } catch (Exception logEx) {
+                // If logging fails, swallow to avoid bubbling exceptions
+            }
+        }
+    }
+
+    private static String getCountryName(String countryCode) {
+        
+        // Return if input is blank
+        if (String.isBlank(countryCode)) {
+            return countryCode;
+        }
+
+        // Get metadata records
+        Map<String, B2B_CountryAndStateList__mdt> allRecords = 
+            B2B_CountryAndStateList__mdt.getAll();
+
+        // Loop through records to find matching country code
+        for (B2B_CountryAndStateList__mdt rec : allRecords.values()) {
+            if (rec.B2B_Country_Code__c != null &&
+                rec.B2B_Country_Code__c.equalsIgnoreCase(countryCode)) {
+                
+                return rec.B2B_Country_Name__c;
+            }
+        }
+
+        // Return countryCode if no match found
+        return countryCode;
+    }
+    
+     /**
+     * Wrapper class for warehouse information
+     */
+    public class WarehouseInfo {
+        @AuraEnabled public String warehouseCode;
+        @AuraEnabled public String warehouseCountry;
+        @AuraEnabled public String warehouseCountryCode;
+        @AuraEnabled public String warehouseAddress;
+        @AuraEnabled public String salesOfficeCode;
+        
+        public WarehouseInfo(String code, String country, String countryCode, 
+                            String address, String so) {
+            this.warehouseCode = code;
+            this.warehouseCountry = country;
+            this.warehouseCountryCode = countryCode;
+            this.warehouseAddress = address;
+            this.salesOfficeCode = so;
+        }
+    }
+    
+    /**
+     * Wrapper class for warehouse data response
+     */
+    public class WarehouseDataWrapper {
+        @AuraEnabled public List<WarehouseInfo> warehouses;
+        @AuraEnabled public WarehouseInfo currentWarehouse;
+        @AuraEnabled public Boolean hasMultipleWarehouses;
+        
+        public WarehouseDataWrapper(List<WarehouseInfo> wh, 
+                                    WarehouseInfo current, 
+                                    Boolean multiple) {
+                                        this.warehouses = wh;
+                                        this.currentWarehouse = current;
+                                        this.hasMultipleWarehouses = multiple;
+                                    }
+    }
