@@ -2,18 +2,19 @@
  * @description Service class for Warehouse selection (Cart & Home)
  *
  * Responsibilities:
- * - Fetch warehouses based on Account Sales Offices (metadata driven)
+ * - Fetch warehouses from metadata based on Account Sales Offices
  * - Resolve current selection (Session → Contact fallback)
- * - Return either:
+ * - Return:
  *      • Full warehouse list + current selection
- *      • Only current selection
- * - Update Contact & Session with selected warehouse
+ *      • OR only current selection
+ * - Update Contact & Session
  * - Update Cart tax area & invalidate pricing
  *
  * Key Optimizations:
+ * - Metadata & country map cached once
+ * - Country lookup is O(1) using map
  * - Current selection resolved once and reused
- * - Country resolved only once (based on current selection)
- * - Metadata cached to avoid repeated queries
+ * - No redundant loops or recomputation
  *
  * @author Yoganand
  * @since May 14, 2026
@@ -57,13 +58,6 @@ public without sharing class B2BwarehouseService {
         }
     }
 
-    private static String getCountryName(String code) {
-        if (String.isBlank(code)) return code;
-
-        initCountryMap();
-        return COUNTRY_MAP.get(code.toLowerCase());
-    }
-
     /* =====================================================
        MAIN API
     ===================================================== */
@@ -73,6 +67,7 @@ public without sharing class B2BwarehouseService {
 
         try {
             initMetadata();
+            initCountryMap(); // ✅ ensure country map ready once
 
             B2BUtil.B2BSessionInformation sessionInfo = B2BUtil.getSessionInformation();
 
@@ -85,11 +80,10 @@ public without sharing class B2BwarehouseService {
                 LIMIT 1
             ];
 
-            /* ================= CURRENT SELECTION ================= */
+            /* ================= CURRENT ================= */
             Map<String, String> current = resolveCurrentSelection(sessionInfo, u);
 
-            /* ================= COUNTRY (COMPUTED ONCE) ================= */
-            String country = resolveCountryForCurrent(current.get('salesOfficeCode'));
+            String currentCountry = resolveCountry(current.get('salesOfficeCode'));
 
             /* =====================================================
                LIST RESPONSE
@@ -124,8 +118,8 @@ public without sharing class B2BwarehouseService {
                 Map<String, Object> selected =
                     matchCurrentToWarehouse(current, warehouses);
 
-                // attach country only to current
-                selected.put('country', country);
+                // ensure current always has resolved country
+                selected.put('country', currentCountry);
 
                 return new B2BActionResponse(true, 'Success', new Map<String, Object>{
                     'warehouses'  => warehouses,
@@ -146,7 +140,7 @@ public without sharing class B2BwarehouseService {
             return new B2BActionResponse(true, 'Success', new Map<String, Object>{
                 'salesOfficeCode' => current.get('salesOfficeCode'),
                 'warehouseCode'   => current.get('warehouseCode'),
-                'country'         => country
+                'country'         => currentCountry
             });
 
         } catch (Exception e) {
@@ -159,7 +153,7 @@ public without sharing class B2BwarehouseService {
     ===================================================== */
 
     /**
-     * Resolves current selection using:
+     * Resolve current selection using:
      * 1. Session (priority)
      * 2. Contact fallback
      */
@@ -182,23 +176,27 @@ public without sharing class B2BwarehouseService {
     }
 
     /**
-     * Resolves country ONLY for current selection
+     * Resolve country using cached map
      */
-    private static String resolveCountryForCurrent(String salesOfficeCode) {
+    private static String resolveCountry(String salesOfficeCode) {
 
         if (String.isBlank(salesOfficeCode)) return null;
 
         if (META_BY_SO.containsKey(salesOfficeCode)) {
-            return getCountryName(
-                META_BY_SO.get(salesOfficeCode)[0].WarehouseCountryCode__c
-            );
+
+            String countryCode =
+                META_BY_SO.get(salesOfficeCode)[0].WarehouseCountryCode__c;
+
+            return countryCode != null
+                ? COUNTRY_MAP.get(countryCode.toLowerCase())
+                : null;
         }
 
         return null;
     }
 
     /**
-     * Builds warehouse list (lightweight - no country resolution here)
+     * Build warehouse list WITH country (fast lookup)
      */
     private static List<Map<String, Object>> buildWarehouseList(Set<String> salesOffices) {
 
@@ -208,10 +206,16 @@ public without sharing class B2BwarehouseService {
             if (!META_BY_SO.containsKey(so)) continue;
 
             for (B2B_SalesOfficeAddress__mdt mdt : META_BY_SO.get(so)) {
+
+                String countryCode = mdt.WarehouseCountryCode__c;
+
                 warehouses.add(new Map<String, Object>{
                     'salesOfficeCode' => so,
                     'warehouseCode'   => mdt.WarehouseCode__c,
-                    'countryCode'     => mdt.WarehouseCountryCode__c,
+                    'countryCode'     => countryCode,
+                    'country'         => countryCode != null
+                        ? COUNTRY_MAP.get(countryCode.toLowerCase())
+                        : null,
                     'address'         => mdt.WarehouseAddress__c
                 });
             }
@@ -221,7 +225,7 @@ public without sharing class B2BwarehouseService {
     }
 
     /**
-     * Matches current selection with list
+     * Match current selection with warehouse list
      */
     private static Map<String, Object> matchCurrentToWarehouse(
         Map<String, String> current,
