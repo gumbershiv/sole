@@ -1,0 +1,1975 @@
+/**
+ * Created by stroxell on 3/26/2025.
+ * @description B2BUtilProduct is a helper class to retrieve Products for the storefront.
+ * The ConnectApi is used to retrieve important product data and enforcing entitlement rules, product media setup, prices, etc.
+ * Data is then collected about inventory, product types, supersession chains and sell-ability to be returned in an usable format
+ * for apex processing or UI building.
+ *
+ * When calling these methods via a test class, a generic wrapper will be returned with MOCK data.  Doing this will prevent the
+ * overhead of setting up a webstore and requiring the use of SeeAllData=true for these test methods.
+ */
+@SuppressWarnings('PMD.NcssTypeCount')
+//Complex Solar business logic around products
+//Class requires without sharing as the users will not be owners of products, inventory, supersession, etc type objects.
+public without sharing class B2BUtilProduct {
+    //private static final String SALESFORCE_API_VERSION = 'v64.0';
+    @TestVisible
+    private static final Set<String> FINAL_PART_SET_FOR_ID_RETRIEVAL = new Set<String>();
+
+    private enum IdsOrSKus {
+        ID, SKU
+    }
+
+    /**
+     * Inner class that will hold Part Supersession data.
+     * This object will hold both older and newer parts.
+     * For supersession chain product data and UI settings, check sellable flag.  If this flag is true, the product is
+     * sellable and may show differently in the UI.
+     * A Note on newerParts array.  This array will NOT hold the last, AKA the finalPart.  The FinalPart is exposed as
+     * data elements on ProductData.
+     * <p/>
+     * - Field Definitions
+     * - productId: String - The productId of the part for this product record
+     * - sku: String - The product sku of the part for this product record
+     * - sellable: Boolean - Flag to quickly determine if this product is sellable (true)
+     * - inventoryAvailable: Decimal - How many of this product are available for purchase
+     * - backorderable: Boolean - Flag to quickly determine if this product is backorderable (true)
+     */
+    public class PartSupersession {
+        @AuraEnabled public String productId; //Id of the product
+        @AuraEnabled public String sku;
+        @AuraEnabled public Boolean sellable;
+        @AuraEnabled public Decimal inventoryAvailable;
+        @AuraEnabled public Boolean backorderable;
+        @AuraEnabled public Boolean isActive;
+
+        /**
+         * Inline constructor to easily create a PartSupersession record.
+         *
+         * @param partNumberByText String
+         * @param productId String
+         * @param sku String
+         * @param sellable Boolean
+         * @param invAvail Decimal
+         * @param backorderable Boolean
+         * @param isActive Boolean
+         */
+        public PartSupersession(String partNumberByText, String productId, String sku, Boolean sellable, Decimal invAvail, Boolean backorderable, Boolean isActive) {
+            this.productId = productId; // to fetch id of the product
+            if (String.isBlank(sku)) {
+                this.sku = partNumberByText;
+            } else {
+                this.sku = sku;
+            }
+
+            this.inventoryAvailable = invAvail;
+            this.backorderable = backorderable;
+            if (!sellable) {
+                //if sellable is set as false, then set to false
+                this.sellable = sellable;
+            } else {
+                //if sellable is set as true, check inventory level and backorderable flag
+                this.sellable = (((invAvail > 0) && (backorderable == false)) || (backorderable));
+            }
+            //Check if the product is active or not when it not sellable
+            if (!this.sellable && isActive == true) {
+                this.isActive = isActive;
+            } else {
+                this.isActive = isActive;
+            }
+        }
+    }
+
+    /**
+     * Wrapper Class to generate a Product Payload to hold ordering information about the product.
+     * - id: String - The current product id
+     * - isActive: Boolean - Flag to quickly determine if current product is active
+     * - fields: Map<String, String> - As returned from ConnectApi for extra data fields on Product Record
+     * - unitprice: Decimal - Will be the "Your Price" in the UI  (Will be the price in the currency)  (optional)
+     * - listprice: Decimal - Will be the "List Price" in the UI (Will be the price in the currency) (optional)
+     * - currencyCode: String - Will be the account currency to use. UI Display must show correct currency symbol.
+     * - sku: String - the current product sku
+     * - productMedia: ConnectApi.ProductMedia - Optional product media data for the image(s)
+     * - stockStatus: String - In Stock, Out of Stock
+     * - instock: Boolean - Flag to quickly determine if stock is available (true)
+     * - sellable: Boolean - Flag to quickly determine if product is sellable (true)
+     * - insalecategory: Boolean - Flag to indicate if the product is in the Sale Category (true)
+     * - backorderable: Boolean - Flag to quickly determine if product is backorderable (true)
+     * - inventoryAvailable: Decimal - Number of items currently available for the current product
+     * - purchaseLimit: Decimal - The maximum amount of items that can be purchased for the product.  If 0, the product is not sellable
+     * - leadTime: String - Lead time message to show when item is out of stock
+     * - uom: String - Unit of measure for the product.  (Each, Pack, Foot)
+     * - uomqty: String - the quantity of the UOM.  (1, 10, 25, 100)
+     * - uomMessage: String - UOM string for UI.  (each, Pack of 25, Bag of 10)
+     * - finalPart: String - If the product has a final part, this is the final part SKU
+     * - finalPartId: String - If the product has a final part SKU, this is the final part Id.  This may be null if the system cannot find the part number.
+     * - finalPartPurchaseLimit: Decimal - The maximum amount of items that can be purchased for the Final Part.  If 0, the final part product is not sellable
+     * - olderParts: List<PartSupersession> - List of all older parts for this product.  Will be null if none exist.
+     * - newerParts: List<PartSupersession> - List of all newer parts for this product.  Will be null if none exist.
+     * - packagePartQuantity Decimal - Package Parts will have a quantity needed for its package.  This entry will hold that value.
+     * - packagePartId String - Salesforce Id of the Package Part - Only used for packages.
+     * - sequence Integer - Used to retain the sequeunce of parts for adding to cart - Only used for packages.
+     *
+     * @see ConnectApi.ProductMedia
+     * @see ConnectApi.ProductOverview
+     * @see ConnectApi.ProductSummary
+     * @see B2BUtilProduct.PartSupersession
+     */
+    @SuppressWarnings('PMD.TooManyFields') //Data wrapper Object that holds many fields for product support in the storefront
+    public class ProductData {
+        @AuraEnabled public String id;
+        @AuraEnabled public Map<String, String> fields;
+        @AuraEnabled public Boolean isActive;
+        @AuraEnabled public Decimal unitprice;
+        @AuraEnabled public Decimal listprice;
+        @AuraEnabled public String currencyCode;
+        @AuraEnabled public String sku;
+        @AuraEnabled public DefaultImage productMedia;
+        @AuraEnabled public String stockStatus; //deprecated
+        @AuraEnabled public Boolean instock; //deprecated
+        @AuraEnabled public Boolean sellable;
+        @AuraEnabled public Boolean insalecategory;
+        @AuraEnabled public Boolean backorderable; //deprecated
+        @AuraEnabled public Decimal inventoryAvailable; //deprecated
+        @AuraEnabled public Decimal purchaseLimit; //deprecated
+        @AuraEnabled public String leadTime; //deprecated
+        @AuraEnabled public String uom;
+        @AuraEnabled public String uomqty;
+        @AuraEnabled public String uomMessage;
+        @AuraEnabled public String finalPart;
+        @AuraEnabled public String finalPartId;
+        @AuraEnabled public Decimal finalPartPurchaseLimit;
+        @AuraEnabled public List<PartSupersession> olderParts;
+        @AuraEnabled public List<PartSupersession> newParts;
+        @AuraEnabled public Decimal packagePartQuantity;
+        @AuraEnabled public String packagePartId;
+        @AuraEnabled public Integer sequence;
+        @AuraEnabled public SolarProductInventory inventory;
+
+        /**
+         * transferFieldsData will set ProductData from "fields" data that is used to make sell-ability decisions (and possible other
+         * high-level data) to expose directly within the wrapper data object.
+         *
+         * @param fields Map<String, String> The incoming field/value map from the ConnectApi
+         */
+        private void transferFieldsData(Map<String, String> fields) {
+            this.fields = fields;
+            try {
+                this.sellable = Boolean.valueOf(fields.get('B2B_IsProductSellable__c'));
+            } catch (NullPointerException npe) {
+                this.sellable = false;
+            }
+            try {
+                this.insalecategory = Boolean.valueOf(fields.get('B2B_IsSaleCategoryProduct__c'));
+            } catch (NullPointerException npe) {
+                this.insalecategory = false;
+            }
+            try {
+                this.isActive = Boolean.valueOf(fields.get('IsActive'));
+            } catch (NullPointerException npe) {
+                this.isActive = false;
+            }
+            this.leadTime = fields.get('B2B_LEAD_TIME__c');
+            this.finalPart = fields.get('B2B_Replaced_By__c');
+            if (String.isNotBlank(finalPart)) {
+                FINAL_PART_SET_FOR_ID_RETRIEVAL.add(this.finalPart);
+            }
+            this.uom = fields.get('B2B_UNITS__c');
+            this.uomqty = fields.get('B2B_PACK_QUANTITY__c');
+
+            try {
+                if ((this.uomqty == '1') || (this.uomqty == '1.0')) {
+                    this.uomMessage = this.uom.toLowerCase();
+                } else {
+                    this.uomMessage = this.uom.toLowerCase() + ' of ' + this.uomqty;
+                }
+            } catch (Exception e) {
+                this.uomMessage = 'each';
+            }
+        }
+
+        /**
+         * removeFields will remove the extra fields data from the payload that was used to map to ProductData
+         */
+        private void removeFields() {
+            this.fields.remove('B2B_IsProductSellable__c');
+            this.fields.remove('B2B_IsLatest__c');
+            this.fields.remove('B2B_Replaced_By__c');
+            this.fields.remove('B2B_IsSaleCategoryProduct__c');
+            this.fields.remove('B2B_UNITS__c');
+            this.fields.remove('B2B_PACK_QUANTITY__c');
+            this.fields.remove('B2B_LEAD_TIME__c');
+            this.fields.remove('IsActive');
+        }
+
+        public ProductData(Product2 product) {
+            this.sku = product.StockKeepingUnit;
+            this.id = product.Id;
+            this.productMedia = null;
+            Map<String, String> newFields = new Map<String, String>();
+            newFields.put('B2B_IsProductSellable__c', String.valueOf(product.B2B_IsProductSellable__c));
+            newFields.put('B2B_IsLatest__c', String.valueOf(product.B2B_IsLatest__c));
+            newFields.put('B2B_Replaced_By__c', product.B2B_Replaced_By__c);
+            newFields.put('B2B_IsSaleCategoryProduct__c', String.valueOf(product.B2B_IsSaleCategoryProduct__c));
+            newFields.put('B2B_UNITS__c', product.B2B_UNITS__c);
+            newFields.put('B2B_PACK_QUANTITY__c', String.valueOf(product.B2B_PACK_QUANTITY__c));
+            newFields.put('B2B_LEAD_TIME__c', String.valueOf(product.B2B_LEAD_TIME__c));
+            newFields.put('IsActive', String.valueOf(product.IsActive));
+            this.transferFieldsData(newFields);
+            this.removeFields();
+        }
+        public ProductData(String partNumber) {
+            this.sku = partNumber;
+            this.fields = new Map<String, String>{
+                    'StockKeepingUnit' => partNumber,
+                    'Name' => partNumber
+            };
+        }
+        /**
+         * Deprecated
+         * Inline constructor for ProductData wrapper object.
+         * This constructor is to be used with ConnectApi.CommerceCatalog.getProducts
+         *
+         * @param prodOverview ConnectApi.ProductOverview Returned Data from ConnectApi
+         *
+         * @see ConnectApi.ProductOverview
+         */
+        public ProductData(ConnectApi.ProductOverview prodOverview) {
+            this.sku = prodOverview.sku;
+            this.id = prodOverview.id;
+            this.productMedia = (B2BUtilProduct.DefaultImage) JSON.deserializeStrict(JSON.serialize(prodOverview.defaultImage), B2BUtilProduct.DefaultImage.class);
+            this.transferFieldsData(prodOverview.fields);
+            this.removeFields();
+        }
+
+        public ProductData(Map<String, Object> prodOverview) {
+            this.sku = (String) prodOverview.get('sku');
+            this.id = (String) prodOverview.get('id');
+            this.productMedia = (B2BUtilProduct.DefaultImage) JSON.deserializeStrict(JSON.serialize(prodOverview.get('defaultImage')), B2BUtilProduct.DefaultImage.class);
+            Map<String, String> newFields = new Map<String, String>();
+            if (prodOverview.get('fields') != null) {
+                for (String fieldName : ((Map<String, Object>) prodOverview.get('fields')).keySet()) {
+                    newFields.put(fieldName, String.valueOf(((Map<String, Object>) prodOverview.get('fields')).get(fieldName)));
+                }
+            }
+            this.fields = newFields;
+
+            this.transferFieldsData(this.fields);
+            this.removeFields();
+        }
+
+        /**
+         * Inline constructor for ProductData wrapper object.
+         * This constructor is to be used with ConnectApi.CommerceSearch.searchProducts
+         *
+         * @param prodSummary ConnectApi.ProductSummary Returned Data from ConnectApi
+         *
+         * @see ConnectApi.ProductSummary
+         */
+        public ProductData(ConnectApi.ProductSummary prodSummary) {
+            this.sku = prodSummary.fields.get('StockKeepingUnit').getValue();
+            this.id = prodSummary.id;
+            this.productMedia = (B2BUtilProduct.DefaultImage) JSON.deserializeStrict(JSON.serialize(prodSummary.defaultImage), B2BUtilProduct.DefaultImage.class);
+
+            //The field map from searchProducts is a different data type from getProducts
+            //Convert the field map to Map<String, String>
+            Map<String, String> newFields = new Map<String, String>();
+            for (String fieldName : prodSummary.fields.keySet()) {
+                newFields.put(fieldName, prodSummary.fields.get(fieldName).getValue());
+            }
+            this.fields = newFields;
+            this.transferFieldsData(newFields);
+            this.removeFields();
+        }
+
+        /**
+         * Using the incoming B2B_ProductInventory__c will add/update the data od ProductData to set the correct
+         * property values and messages around inventory data and its impacts to product availability and sell-ability.
+         *
+         * @param invData B2B_ProductInventory__c The current inventory record for the current product.
+         *
+         * @return ProductData Updated ProductData record for inventory related decisions
+         *
+         * @see B2B_ProductInventory__c
+         */
+        public ProductData addInventoryData(B2B_ProductInventory__c invData) {
+            System.debug('DEBUG → invData addInventoryData: ' + invData);
+            if (invData != null) {
+                this.stockStatus = invData.B2B_Status__c;
+                this.instock = invData.B2B_InventoryAvailableInSalesUOM__c > 0;
+                this.backorderable = invData.B2B_AllowBackOrders__c;
+                this.inventoryAvailable = invData.B2B_InventoryAvailableInSalesUOM__c;
+                if (!this.instock) {
+                    //todo PageLabel
+                    this.leadTime = 'Lead time up to ' + this.leadTime + ' business days';
+                }
+                if ((!this.instock) && (!this.backorderable)) {
+                    this.sellable = false;
+                }
+
+                if (this.sellable) {
+                    if (this.backorderable) {
+                        this.purchaseLimit = 99999;  //TODO Custom Metadata
+                    } else {
+                        this.purchaseLimit = this.inventoryAvailable;
+                    }
+                } else {
+                    this.purchaseLimit = 0;
+                }
+            } else {
+                this.stockStatus = 'Out of Stock';
+                this.instock = false;
+                //this.backorderable = invData.B2B_AllowBackOrders__c;
+                this.inventoryAvailable = 0;
+                this.sellable = false;
+                this.purchaseLimit = 0;
+            }
+            return this;
+        }
+
+
+        public ProductData addInventoryDataNew(SolarProductInventory invData) {
+            if (invData != null) {
+                //this.instock = invData.globalWarehouseInventory > 0;
+
+                //this.backorderable = invData.allowBackOrder;
+
+                if ((invData.globalWarehouseInventory<=0) && (!invData.allowBackOrder)) {
+                    this.sellable = false;
+                } else {
+                    this.sellable = true;
+                }
+
+                if ((invData.allowBackOrder) && (invData.currentWarehouseInventory>0)) {
+                    invData.currentWarehouseStatus = 'In Stock';
+                } else if ((invData.allowBackOrder) && (invData.currentWarehouseInventory<=0)) {
+                    invData.currentWarehouseStatus = 'Out of Stock';
+                } else if ((!invData.allowBackOrder) && (invData.currentWarehouseInventory>0)) {
+                    invData.currentWarehouseStatus = 'Limited Availability';
+                } else if ((!invData.allowBackOrder) && (invData.currentWarehouseInventory<=0)) {
+                    invData.currentWarehouseStatus = 'Unavailable';
+                }
+
+                if ((invData.allowBackOrder) && (invData.otherWarehouseInventory>0)) {
+                    invData.otherWarehouseStatus = 'In Stock';
+                } else if ((invData.allowBackOrder) && (invData.otherWarehouseInventory<=0)) {
+                    invData.otherWarehouseStatus = 'Out of Stock';
+                } else if ((!invData.allowBackOrder) && (invData.otherWarehouseInventory>0)) {
+                    invData.otherWarehouseStatus = 'Limited Availability';
+                } else if ((!invData.allowBackOrder) && (invData.otherWarehouseInventory<=0)) {
+                    invData.otherWarehouseStatus = 'Unavailable';
+                }
+                if (this.sellable) {
+
+                    if (invData.allowBackOrder) {
+                        invData.purchaseLimit = 99999;  //TODO Custom Metadata
+                    } else {
+                        invData.purchaseLimit = invData.globalWarehouseInventory;
+                    }
+                } else {
+                    invData.purchaseLimit = 0;
+                }
+            } else {
+                //this.stockStatus = 'Out of Stock';
+                //this.instock = false;
+                //this.backorderable = invData.B2B_AllowBackOrders__c;
+                invData.currentWarehouseStatus = invData.allowBackOrder ? 'Out of Stock' : 'Unavailable';
+                invData.otherWarehouseStatus = invData.allowBackOrder ? 'Out of Stock' : 'Unavailable';
+                this.sellable = false;
+                invData.globalWarehouseInventory = 0;
+                invData.currentWarehouseInventory = 0;
+                this.purchaseLimit = 0;
+            }
+            this.inventory = invData;
+            return this;
+        }
+
+
+
+
+
+        /**
+         * Using the pricing data for the ConnectApi call, convert it into Product Data for easy retrieval.
+         * Pricing data is only included when excludePrices is false on the initial call to build ProductData
+         *
+         * @param priceResult ConnectApi.PricingResultLineItem From ConnectApi getPrice call
+         * @param currencyCode String The currency code of the account
+         *
+         * @return ScottB2BUtilProduct.ProductData
+         *
+         * @see ConnectApi.PricingResultLineItem
+         */
+        public ProductData addPricingData(ConnectApi.PricingResultLineItem priceResult, String currencyCode) {
+            if (priceResult != null) {
+                this.listprice = Decimal.valueOf(priceResult.listPrice);
+                this.unitprice = Decimal.valueOf(priceResult.unitPrice);
+                this.currencyCode = currencyCode;
+            }
+
+            return this;
+        }
+
+    }
+
+    public class SolarProductInventory {
+        /*
+           Current Warehouse Code
+           Inventory in current warehouse  (currentWarehouseInventory)
+           Lead Time at current warehouse
+           Inventory sum of other warehouses (otherWarehouseInventory)
+           Sum of all warehouses (globalWarehouseInventory)
+           B2B_AllowBackOrders__c
+           B2B_Status__c
+           B2B_Product__c
+           B2B_Product__r.StockKeepingUnit
+         */
+		//AURAENABLED for fetching details in lwc
+        @AuraEnabled public String currentWarehouseCode;
+        @AuraEnabled public Integer currentWarehouseLeadTime;
+        @AuraEnabled public Integer currentWarehouseInventory=0;
+        @AuraEnabled public Integer otherWarehouseInventory=0;
+        @AuraEnabled public Integer globalWarehouseInventory=0;
+        @AuraEnabled public Boolean allowBackOrder=false;
+        @AuraEnabled public String currentWarehouseStatus;
+        @AuraEnabled public String otherWarehouseStatus;
+        @AuraEnabled public Id productId;
+        @AuraEnabled public String productSku;
+        @AuraEnabled public Integer purchaseLimit=0;
+    }
+    /**
+     * Wrapper class returned when using CommerceSearch.  This requires some extra level of data that can be consumed
+     * by the caller, in particular for the PLP.
+     *
+     * @see ConnectApi.ProductSearchResults
+     * @see ScottB2BUtilProduct.ProductData
+     */
+    public class ProductSearchWrapper {
+        public List<ProductData> productData;
+        public Map<Id, ProductData> mapOfProductIdToProductData;
+        public ConnectApi.ProductSearchResults searchResults;
+        public String soloProductId;  //used when search does not find anything, but there is an active product2 record
+    }
+
+    /**
+     * Wrapper class returned when using B2B Package Part and Commerce getProducts.  This requires some extra level of data that can be consumed
+     * by the caller, in particular for the PLP designed for the package section.
+     *
+     * @see ScottB2BUtilProduct.ProductDataForPackage
+     * @see ScottB2BUtilProduct.ProductData
+     */
+    public class ProductPackageWrapper {
+        public List<ProductData> productData;
+        public Map<Id, ProductData> mapOfProductIdToProductData;
+        public ProductDataForPackage searchResults;
+    }
+
+    /**
+     * In order to make sell-ability decisions, certain product data must be retrieved.  Once populated on Product Data
+     * These fields no longer need to be part of the Fields payload.  Also each person using this utility does not need
+     * to know all of the field names or add them to their query.  This will add the needed fields for the ConnectApi
+     * to use.
+     *
+     * @param fields List<String> The fields originally requested by the caller.
+     *
+     * @return List<String> The new set of fields, included the needed ones to build ProductData
+     */
+    @TestVisible
+    private static List<String> addNeededFieldsForProductLogic(List<String> fields) {
+        if (fields == null) {
+            fields = new List<String>();
+        }
+        if (!fields.contains('B2B_IsProductSellable__c')) fields.add('B2B_IsProductSellable__c');
+        if (!fields.contains('B2B_IsLatest__c')) fields.add('B2B_IsLatest__c');
+        if (!fields.contains('B2B_Replaced_By__c')) fields.add('B2B_Replaced_By__c');
+        if (!fields.contains('B2B_IsSaleCategoryProduct__c')) fields.add('B2B_IsSaleCategoryProduct__c');
+        if (!fields.contains('B2B_UNITS__c')) fields.add('B2B_UNITS__c');
+        if (!fields.contains('B2B_PACK_QUANTITY__c')) fields.add('B2B_PACK_QUANTITY__c');
+        if (!fields.contains('B2B_LEAD_TIME__c')) fields.add('B2B_LEAD_TIME__c');
+        if (!fields.contains('StockKeepingUnit')) fields.add('StockKeepingUnit');
+        if (!fields.contains('IsActive')) fields.add('IsActive');
+        if (!fields.contains('B2B_Info_Code__c')) fields.add('B2B_Info_Code__c');
+        return fields;
+    }
+
+    /**
+     * Once all of the ProductData elements are assembled, need to run through all parts that have a finalPart set.
+     * finalPart is the SKU.  Using the finalPart SKU, find the correct product id for the SKU and then set finalPartId.
+     * This will also get the finalPartPurchaseLimit for that finalPart.
+     *
+     * @param productDataList List<ProductData>  List of ProductData that may need to have finalParts resolved for Ids.
+     *
+     * @return List<ProductData> Updated List with the finalPartId
+     */
+    @SuppressWarnings('PMD.AvoidDeeplyNestedIfStmts') //Complex logic to support Solar product orderability rules and supersession chains.
+    public static List<ProductData> resolveFinalPartDatum(List<ProductData> productDataList) {
+        if (!FINAL_PART_SET_FOR_ID_RETRIEVAL.isEmpty()) {
+            //Build map of final part skus with their product inventories
+            //MLP we will only be supporting UDQS10 warehouse
+            //TODO With multiple warehouse processing, this will need to be updated to select proper warehouse
+            //TODO ddd
+            //TODO ddd
+            Map<String, AggregateResult> productSkuToProductInventory = new Map<String, AggregateResult>();
+            for (AggregateResult productInvSum : [
+                    SELECT B2B_Product__c, B2B_Product__r.StockKeepingUnit, B2B_Product__r.B2B_IsProductSellable__c, SUM(B2B_InventoryAvailableInSalesUOM__c), B2B_AllowBackOrders__c
+                    FROM B2B_ProductInventory__c
+                    WHERE B2B_Product__r.StockKeepingUnit IN :FINAL_PART_SET_FOR_ID_RETRIEVAL
+                    GROUP BY B2B_Product__c, B2B_Product__r.StockKeepingUnit, B2B_Product__r.B2B_IsProductSellable__c, B2B_AllowBackOrders__c
+            ]) {
+                productSkuToProductInventory.put((String)productInvSum.get('StockKeepingUnit'), productInvSum);
+            }
+            for (ProductData pd : productDataList) {
+                if (String.isNotBlank(pd.finalPart)) {
+                    AggregateResult productInv = productSkuToProductInventory.get(pd.finalPart);
+                    if (productInv != null) {
+                        pd.finalPartId = (String) productInv.get('B2B_Product__c');
+                        pd.finalPartPurchaseLimit = (Boolean) productInv.get('B2B_AllowBackOrders__c') ? 99999 : (Decimal)productInv.get('expr0');
+                        //Make finalpart not sellable by setting Id to null and purchaselimit to 0
+                        if (!(Boolean) productInv.get('B2B_IsProductSellable__c')) {
+                            pd.finalPartId = null;
+                            pd.finalPartPurchaseLimit = 0;
+                        }
+                    } else {
+                        pd.finalPartId = null;
+                        pd.finalPartPurchaseLimit = 0;
+                    }
+                }
+            }
+        }
+        return productDataList;
+
+    }
+    /**
+     * Takes a list of product skus OR list of product ids and returns a map.
+     * The Map will have the Product2 Id as the key and the value will be the corresponding inventory record.
+     *
+     * @param skusOrIds List<String> of product skus or product ids to get inventory for
+     *
+     * @return Map<Id, B2B_ProductInventory__c>
+     *
+     * @see B2B_ProductInventory__c
+     */
+    @SuppressWarnings('PMD.EmptyCatchBlock')
+    @TestVisible
+    private static Map<Id, B2B_ProductInventory__c> createInventoryMap(List<String> skusOrIds) {
+        Set<String> localSkusOrIds = new Set<String>(skusOrIds);  //create Local list to prevent mutation of list back to caller
+        //MLP we will only be supporting UDQS10 warehouse
+        //TODO With multiple warehouse processing, this will need to be updated to select proper warehouse
+        Map<Id, B2B_ProductInventory__c> productToInventoryMap = new Map<Id, B2B_ProductInventory__c>();
+        for (B2B_ProductInventory__c inv : [
+                SELECT
+                        B2B_AllowBackOrders__c,
+                        B2B_InventoryAvailableInSalesUOM__c,
+                        B2B_Status__c,
+                        B2B_Product__c,
+                        B2B_Product__r.StockKeepingUnit,
+                        Id
+                FROM B2B_ProductInventory__c
+                WHERE (B2B_Product__r.StockKeepingUnit IN :skusOrIds OR B2B_Product__r.Id IN :skusOrIds)
+                AND B2B_Warehouse__c = 'UDQS10'
+        ]) {
+            productToInventoryMap.put(inv.B2B_Product__c, inv);
+            localSkusOrIds.remove(String.valueOf(inv.B2B_Product__c));
+            localSkusOrIds.remove(inv.B2B_Product__r.StockKeepingUnit);
+        }
+        for (Product2 p : [
+                SELECT Id, StockKeepingUnit
+                FROM Product2
+                WHERE (StockKeepingUnit IN :localSkusOrIds OR Id IN :localSkusOrIds)
+        ]) {
+            productToInventoryMap.put(p.Id, new B2B_ProductInventory__c(B2B_InventoryAllocated__c = 0, B2B_InventoryOnHand__c = 0, B2B_InventoryOnOrder__c = 0));
+            localSkusOrIds.remove(String.valueOf(p.Id));
+            localSkusOrIds.remove(p.StockKeepingUnit);
+        }
+        for (String key : localSkusOrIds) {
+            try {
+                Id pId = (Id) key;
+                if (!productToInventoryMap.containsKey(key)) {
+                    productToInventoryMap.put(pId, new B2B_ProductInventory__c(B2B_InventoryAllocated__c = 0, B2B_InventoryOnHand__c = 0, B2B_InventoryOnOrder__c = 0));
+                }
+            } catch (Exception e) {
+                //do nothing.  An exception may occur due to the combination of SKUs and Ids.  Salesforce does not like when you use a sku as an ID.
+                //Exceptions are expected and it is ok to ignore them here.
+            }
+        }
+        return productToInventoryMap;
+    }
+
+    /**
+     * Takes a list of product skus OR list of product ids and returns a map.
+     * The Map will have the Product2 Id as the key and the value will be the corresponding inventory record.
+     *
+     * @param skusOrIds List<String> of product skus or product ids to get inventory for
+     *
+     * @return Map<Id, B2B_ProductInventory__c>
+     *
+     * @see ScottB2BUtilProduct.SolarProductInventory
+     */
+    @SuppressWarnings('PMD.EmptyCatchBlock')
+    @TestVisible
+    private static Map<Id, SolarProductInventory> createInventoryMapNew(List<String> skusOrIds, String currentWarehouse) {
+        Set<String> localSkusOrIds = new Set<String>(skusOrIds);  //create Local list to prevent mutation of list back to caller
+        /* Things we need...
+           Current Warehouse Code
+           Inventory in current warehouse  (localInventory)
+           Lead Time at current warehouse
+           Inventory sum of other warehouses (otherInventory)
+           Sum of all warehouses (globalInventory)
+           B2B_AllowBackOrders__c
+           B2B_Status__c
+           B2B_Product__c
+           B2B_Product__r.StockKeepingUnit
+         */
+
+        //MLP we will only be supporting UDQS10 warehouse
+        //TODO With multiple warehouse processing, this will need to be updated to select proper warehouse
+        Map<Id, B2B_ProductInventory__c> productToInventoryMapOrig = new Map<Id, B2B_ProductInventory__c>();
+        Map<Id, SolarProductInventory> productToInventoryMap = new Map<Id, SolarProductInventory>();
+        //String currentWarehouse = 'UDQS10';
+        for (B2B_ProductInventory__c inv : [
+                SELECT
+                        B2B_AllowBackOrders__c,
+                        B2B_InventoryAvailableInSalesUOM__c,
+                        B2B_Status__c,
+                        B2B_Product__c,
+                        B2B_Product__r.StockKeepingUnit,
+            			B2B_Product__r.B2B_LEAD_TIME__c,
+                        B2B_Warehouse__c,
+                        Id
+                FROM B2B_ProductInventory__c
+                WHERE (B2B_Product__r.StockKeepingUnit IN :skusOrIds OR B2B_Product__r.Id IN :skusOrIds)
+                //AND B2B_Warehouse__c = 'UDQS10'
+        ]) {
+            
+            B2B_StoreSetting__mdt storeSetting = B2B_StoreSetting__mdt.getInstance('ShopSolar');
+            String usWarehouseCode = storeSetting.B2B_UnitedStatesWarehouseCode__c;
+            Integer additionalLeadTime = storeSetting.B2B_additionalLeadTime__c != null ? Integer.valueOf(storeSetting.B2B_additionalLeadTime__c) : 0;
+            Integer currentWarehouseLeadTime = inv.B2B_Product__r.B2B_LEAD_TIME__c != null ? Integer.valueOf(inv.B2B_Product__r.B2B_LEAD_TIME__c) : 0 ;
+            
+            if (productToInventoryMap.containsKey(inv.B2B_Product__c)) {
+                SolarProductInventory pi = productToInventoryMap.get(inv.B2B_Product__c);
+                if (inv.B2B_Warehouse__c == currentWarehouse) {
+                    pi.currentWarehouseCode = inv.B2B_Warehouse__c;
+                    pi.currentWarehouseInventory = Integer.valueOf(inv.B2B_InventoryAvailableInSalesUOM__c);
+                    if(currentWarehouse == usWarehouseCode){
+                        pi.currentWarehouseLeadTime = currentWarehouseLeadTime;
+                    }else{
+                        pi.currentWarehouseLeadTime = currentWarehouseLeadTime + additionalLeadTime;
+                    }
+                    //pi.currentWarehouseLeadTime = Integer.valueOf(inv.B2B_WarehouseLeadTime__c);
+                } else {
+                    if((Integer.valueOf(inv.B2B_InventoryAvailableInSalesUOM__c)) > 0){
+                        pi.globalWarehouseInventory += Integer.valueOf(inv.B2B_InventoryAvailableInSalesUOM__c);
+                    }
+                }
+                if((Integer.valueOf(inv.B2B_InventoryAvailableInSalesUOM__c)) > 0){
+                    pi.globalWarehouseInventory += Integer.valueOf(inv.B2B_InventoryAvailableInSalesUOM__c);
+                }
+            } else {
+                SolarProductInventory pi = new SolarProductInventory();
+                if (inv.B2B_Warehouse__c == currentWarehouse) {
+                    pi.currentWarehouseCode = inv.B2B_Warehouse__c;
+                    pi.currentWarehouseInventory = Integer.valueOf(inv.B2B_InventoryAvailableInSalesUOM__c);
+                    //pi.currentWarehouseLeadTime = Integer.valueOf(inv.B2B_WarehouseLeadTime__c);
+                    pi.currentWarehouseStatus = inv.B2B_Status__c;
+                    if(currentWarehouse == usWarehouseCode){
+                        pi.currentWarehouseLeadTime = currentWarehouseLeadTime;
+                    }else{
+                        pi.currentWarehouseLeadTime = currentWarehouseLeadTime + additionalLeadTime;
+                    }
+                    
+                } else {
+                    pi.otherWarehouseInventory += Integer.valueOf(inv.B2B_InventoryAvailableInSalesUOM__c);
+                    pi.otherWarehouseStatus = inv.B2B_Status__c;
+                }
+                pi.globalWarehouseInventory = Integer.valueOf(inv.B2B_InventoryAvailableInSalesUOM__c) > 0 ? Integer.valueOf(inv.B2B_InventoryAvailableInSalesUOM__c) : 0;
+                pi.productId = inv.B2B_Product__c;
+                pi.allowBackOrder = inv.B2B_AllowBackOrders__c;
+                pi.productSku = inv.B2B_Product__r.StockKeepingUnit;
+
+                productToInventoryMap.put(inv.B2B_Product__c, pi);
+            }
+            //productToInventoryMap.put(inv.B2B_Product__c, inv);
+            localSkusOrIds.remove(String.valueOf(inv.B2B_Product__c));
+            localSkusOrIds.remove(inv.B2B_Product__r.StockKeepingUnit);
+        }
+        for (Product2 p : [
+                SELECT Id, StockKeepingUnit
+                FROM Product2
+                WHERE (StockKeepingUnit IN :localSkusOrIds OR Id IN :localSkusOrIds)
+        ]) {
+            SolarProductInventory pi = new SolarProductInventory();
+            pi.currentWarehouseCode = currentWarehouse;
+            pi.currentWarehouseInventory = 0;
+            pi.otherWarehouseInventory = 0;
+            pi.globalWarehouseInventory = 0;
+            pi.productId = p.Id;
+            productToInventoryMap.put(p.Id, pi);
+
+//            productToInventoryMap.put(p.Id, new B2B_ProductInventory__c(B2B_InventoryAllocated__c = 0, B2B_InventoryOnHand__c = 0, B2B_InventoryOnOrder__c = 0));
+            localSkusOrIds.remove(String.valueOf(p.Id));
+            localSkusOrIds.remove(p.StockKeepingUnit);
+        }
+        for (String key : localSkusOrIds) {
+            try {
+                Id pId = (Id) key;
+                if (!productToInventoryMap.containsKey(key)) {
+                    SolarProductInventory pi = new SolarProductInventory();
+                    pi.currentWarehouseCode = currentWarehouse;
+                    pi.currentWarehouseInventory = 0;
+                    pi.otherWarehouseInventory = 0;
+                    pi.globalWarehouseInventory = 0;
+                    pi.productId = pId;
+                    productToInventoryMap.put(pId, pi);
+                    //productToInventoryMap.put(pId, new B2B_ProductInventory__c(B2B_InventoryAllocated__c = 0, B2B_InventoryOnHand__c = 0, B2B_InventoryOnOrder__c = 0));
+                }
+            } catch (Exception e) {
+                //do nothing.  An exception may occur due to the combination of SKUs and Ids.  Salesforce does not like when you use a sku as an ID.
+                //Exceptions are expected and it is ok to ignore them here.
+            }
+        }
+        return productToInventoryMap;
+    }
+
+    /**
+     * apiCommerceGetProducts replaces ConnectAPI.commercecatalog.getProducts.  Both getProducts have been deprecated by version
+     * v64.00.  This method will call the Salesforce products API directly.
+     * - https://developer.salesforce.com/docs/atlas.en-us.chatterapi.meta/chatterapi/connect_resources_commerce_webstore_products.htm
+     * - https://developer.salesforce.com/docs/atlas.en-us.chatterapi.meta/chatterapi/connect_responses_product_overview_collection.htm
+     * @param webstoreId String
+     * @param effAccountId String
+     * @param inputType IdsOrSkus Informs the method about the working items that are coming in
+     * @param workingItems List<String> String list of either Ids or SKUs.  Be sure to set inputType correctly
+     * @param fields List<String> The list of fields for the API to retrieve
+     * @param excludeMedia Boolean - true will exclude the call to get media information
+     *
+     * @return Map<String, Object> created from result.  This is an untyped version of the ProductOverviewCollection
+     */
+
+//    RETAINING METHOD JUST INCASE we want to bring back the API call.  Hopefully not
+
+//    private static Map<String, Object> apiCommerceGetProducts(String webstoreId, String effAccountId, IdsOrSKus inputType, List<String> workingItems, List<String> fields, Boolean excludeMedia) {
+//        Map<String, Object> apiProductOverviewCollection;
+//        String sfdcURL = Url.getOrgDomainUrl().toExternalForm();
+//        String restAPIURL = sfdcURL + '/services/data/'+SALESFORCE_API_VERSION+'/commerce/webstores/'+webstoreId+'/products';
+//        String qString = '?effectiveAccountId=' + effAccountId + '&excludeMedia=' + excludeMedia + '&fields='+String.join(fields,',');
+//        if (inputType == IdsOrSKus.SKU) {
+//            qString = qString + '&skus=' + String.join(workingItems,',');
+//        } else if (inputType == IdsOrSKus.ID) {
+//            qString = qString + '&ids=' + String.join(workingItems,',');
+//        }
+//        restAPIURL = restAPIURL + qString;
+//        HttpRequest httpRequest = new HttpRequest();
+//        httpRequest.setMethod('GET');
+//        System.debug('sessionid: ' + UserInfo.getSessionId());
+//        if (String.isBlank(UserInfo.getSessionId())) {
+//            System.debug('sessionid is blank!!!');
+//        } else {
+//            System.debug('sessionid is populated!!!');
+//        }
+//        httpRequest.setHeader('Authorization', 'OAuth ' + UserInfo.getSessionId());
+//        httpRequest.setHeader('Authorization', 'Bearer ' + UserInfo.getSessionId());
+//        httpRequest.setHeader('Content-Type', 'application/json');
+//        httpRequest.setEndpoint(restAPIURL);
+//
+//        HttpResponse httpResponse;
+//        try {
+//            Http http = new Http();
+//            httpResponse = http.send(httpRequest);
+////            System.debug('httpRequest 511-->'+httpRequest);
+////            System.debug('httResponse 512-->'+httpResponse.getBody());
+//            apiProductOverviewCollection = (Map<String, Object>)JSON.deserializeUntyped(httpResponse.getBody());
+////            System.debug('httResponse 514-->'+httpResponse.getBody());
+////            System.debug('apiProductOverviewCollection-->'+apiProductOverviewCollection);
+//        } catch( System.Exception e) {
+//            throw new B2BException(e);
+//        }
+//        return apiProductOverviewCollection;
+//    }
+
+
+    /**
+     * commerceCatalogGetProducts calls ConnectApi.CommerceCatalog.getProducts to retrieve products maintaining entitlement rules
+     *
+     * @param webstoreId String
+     * @param effAccountId String
+     * @param inputType IdsOrSkus Informs the method about the working items that are coming in
+     * @param workingItems List<String> String list of either Ids or SKUs.  Be sure to set inputType correctly
+     * @param fields List<String> The list of fields for the API to retrieve
+     * @param excludeMedia Boolean - true will exclude the call to get media information
+     *
+     * @return ConnectApi.ProductOverviewCollection from ConnectApi.CommerceCatalog.getProducts
+     */
+    private static ConnectApi.ProductOverviewCollection commerceCatalogGetProducts(String webstoreId, String effAccountId, IdsOrSKus inputType, List<String> workingItems, List<String> fields, Boolean excludeMedia) {
+        ConnectApi.ProductOverviewCollection prodOverviewCollection;
+        if (inputType == IdsOrSKus.SKU) {
+            prodOverviewCollection = ConnectApi.CommerceCatalog.getProducts(webstoreId, effAccountId, null, workingItems, fields, excludeMedia, true, false, false, false, 'false');
+        } else {
+            prodOverviewCollection = ConnectApi.CommerceCatalog.getProducts(webstoreId, effAccountId, workingItems, null, fields, excludeMedia, true, false, false, false, 'false');
+        }
+
+        return prodOverviewCollection;
+    }
+
+
+    /**
+     * Will run through skusOrIds to find all older and all newer parts and build lists to attach to the ProductData.
+     *
+     * @param productIdToProductData Map<Id, ProductData>
+     * @param skusOrIds List<String>
+     *
+     * @see ScottB2BUtilProduct.PartSupersession
+     */
+    @TestVisible
+    private static void addProductSupersessionData(Map<Id, ProductData> productIdToProductData, List<String> skusOrIds) {
+        //Query to get the older parts in the chain
+        //Add to map to retrieve later by ProductId of current Part, with List of older parts in order
+        Set<String> skusToGetInventoryFor = new Set<String>();
+        Map<Id, List<ProductSupersessionChain__c>> productToSuperOlderMap = new Map<Id, List<ProductSupersessionChain__c>>();
+        for (ProductSupersessionChain__c supersession : [
+                SELECT Id, ReplacedBy__r.StockKeepingUnit, ReplacedProduct__r.StockKeepingUnit,
+                        ReplacedProduct__r.IsActive, ReplacedProduct__r.B2B_IsProductSellable__c,
+                        ReplacedByText__c, ReplacedProductText__c
+                FROM ProductSupersessionChain__c
+                WHERE (ReplacedBy__r.Id IN :skusOrIds OR ReplacedBy__r.StockKeepingUnit IN :skusOrIds)
+                ORDER BY Sequence__c, ReplacedProduct__r.StockKeepingUnit DESC
+        ]) {
+            if (!productToSuperOlderMap.containsKey(supersession.ReplacedBy__c)) {
+                productToSuperOlderMap.put(supersession.ReplacedBy__c, new List<ProductSupersessionChain__c>());
+            }
+            productToSuperOlderMap.get(supersession.ReplacedBy__c).add(supersession);
+            if (supersession.ReplacedProduct__r.IsActive || supersession.ReplacedProduct__r.B2B_IsProductSellable__c) {
+                skusToGetInventoryFor.add(supersession.ReplacedProduct__r.StockKeepingUnit);
+            }
+        }
+
+        //Query to get the newer parts in the chain
+        //Add to map to retrieve later by ProductId of current Part, with List of newer parts in order
+        Map<Id, List<ProductSupersessionChain__c>> productToSuperNewerMap = new Map<Id, List<ProductSupersessionChain__c>>();
+        for (ProductSupersessionChain__c supersession : [
+                SELECT Id, ReplacedBy__r.StockKeepingUnit, ReplacedProduct__r.StockKeepingUnit, ReplacedBy__r.B2B_Replaced_By__c, ReplacedProduct__r.B2B_Replaced_By__c,
+                        ReplacedBy__r.IsActive, ReplacedBy__r.B2B_IsProductSellable__c,
+                        ReplacedByText__c, ReplacedProductText__c
+                FROM ProductSupersessionChain__c
+                WHERE (ReplacedProduct__r.Id IN :skusOrIds OR ReplacedProduct__r.StockKeepingUnit IN :skusOrIds)
+                ORDER BY Sequence__c, ReplacedProduct__r.StockKeepingUnit DESC
+        ]) {
+
+            if ((String.isNotBlank(supersession.ReplacedBy__r.StockKeepingUnit) &&
+                    (supersession.ReplacedBy__r.StockKeepingUnit != supersession.ReplacedProduct__r.B2B_Replaced_By__c))) {
+                if (!productToSuperNewerMap.containsKey(supersession.ReplacedProduct__c)) {
+                    productToSuperNewerMap.put(supersession.ReplacedProduct__c, new List<ProductSupersessionChain__c>());
+                }
+                productToSuperNewerMap.get(supersession.ReplacedProduct__c).add(supersession);
+                if (supersession.ReplacedBy__r.IsActive || supersession.ReplacedBy__r.B2B_IsProductSellable__c) {
+                    skusToGetInventoryFor.add(supersession.ReplacedBy__r.StockKeepingUnit);
+                }
+            }
+        }
+        
+        B2BUtil.B2BSessionInformation si = B2BUtil.getSessionInformation();
+        
+        //Need to get inventory for supersession parts
+        Map<Id, SolarProductInventory> productToInventoryMap = createInventoryMapNew(new List<String>(skusToGetInventoryFor),si.warehouseCode);
+
+        //merge inventory and basic product information to build "Older Parts" List
+        for (ProductData pd : productIdToProductData.values()) {
+            if (!productToSuperOlderMap.isEmpty() && productToSuperOlderMap.containsKey(pd.id)) {
+                for (ProductSupersessionChain__c psc : productToSuperOlderMap.get(pd.id)) {
+                    if (pd.olderParts == null) {
+                        pd.olderParts = new List<B2BUtilProduct.PartSupersession>();
+                    }
+                    SolarProductInventory inv = productToInventoryMap.get(psc.ReplacedProduct__c);
+                    if (inv == null) {
+                        pd.olderParts.add(new PartSupersession(psc.ReplacedProductText__c, psc.ReplacedProduct__c, psc.ReplacedProduct__r.StockKeepingUnit, psc.ReplacedProduct__r.B2B_IsProductSellable__c, 0, false, psc.ReplacedProduct__r.IsActive));
+                    } else {
+                        pd.olderParts.add(new PartSupersession(psc.ReplacedProductText__c, psc.ReplacedProduct__c, psc.ReplacedProduct__r.StockKeepingUnit, psc.ReplacedProduct__r.B2B_IsProductSellable__c, inv.globalWarehouseInventory, inv.allowBackOrder, psc.ReplacedProduct__r.IsActive));
+                    }
+                }
+            }
+        }
+
+        //merge inventory and basic product information to build "Newer Parts" List
+        for (ProductData pd : productIdToProductData.values()) {
+            if (!productToSuperNewerMap.isEmpty() && productToSuperNewerMap.containsKey(pd.id)) {
+                for (ProductSupersessionChain__c psc : productToSuperNewerMap.get(pd.id)) {
+                    if (pd.newParts == null) {
+                        pd.newParts = new List<B2BUtilProduct.PartSupersession>();
+                    }
+                    SolarProductInventory inv = productToInventoryMap.get(psc.ReplacedBy__c);
+                    if (inv == null) {
+                        pd.newParts.add(new PartSupersession(psc.ReplacedByText__c, psc.ReplacedBy__c, psc.ReplacedBy__r.StockKeepingUnit, psc.ReplacedBy__r.B2B_IsProductSellable__c, 0, false, psc.ReplacedBy__r.IsActive));
+                    } else {
+                        pd.newParts.add(new PartSupersession(psc.ReplacedByText__c, psc.ReplacedBy__c, psc.ReplacedBy__r.StockKeepingUnit, psc.ReplacedBy__r.B2B_IsProductSellable__c, inv.globalWarehouseInventory, inv.allowBackOrder, psc.ReplacedBy__r.IsActive));
+                    }
+                }
+            }
+        }
+    }
+
+
+    /**
+     * Maximum 500 products. Provide a list of SKUs to return a List of ProductData.  This method will called components
+     * to get product data, prices, media, inventory and sell-ability rules.
+     * Will throw B2BException if more than 500 Skus are passed in.
+     *
+     * @param webstoreId String
+     * @param effAccountId String
+     * @param skus List<String>
+     * @param fields List<String>
+     * @param excludeMedia Boolean
+     * @param excludePricing Boolean
+     * @param excludeSupersession Boolean
+     *
+     * @return List<ProductData>
+     *
+     * @throws B2BException Will be thrown when over 500 skus are given
+     *
+     * @see ScottB2BUtilProduct.ProductData
+     */
+    public static List<ProductData> getProductsBySku(
+            String webstoreId,
+            String effAccountId,
+            List<String> skus,
+            List<String> fields,
+            Boolean excludeMedia,
+            Boolean excludePricing,
+            Boolean excludeSupersession) {
+        if (Test.isRunningTest() && B2BUtilProductTest.testThrowException) {
+            throw new B2BException('Test case wants an exception thrown!');
+        }
+        if (skus.size() > 500) {
+            B2BLoggingUtil.error('general_logger', 'B2BUtilProduct', 'getProductsBySku', 0, 'Maximum products exceeded.  500 is max, you sent ' + skus.size(), null);
+            B2BLoggingUtil.flush();
+            throw new B2BException('Maximum products exceeded.  500 is max, you sent ' + skus.size());
+        }
+        B2BUtil.B2BSessionInformation si = B2BUtil.getSessionInformation();
+        system.debug('s......>i'+si);
+
+        // we can fetch warehouse from si
+        String currencyCode = 'USD';
+        if (B2BUtil.isGuest() || si == null || si.areFactorsCurrent == false || String.isEmpty(si.currencyCode)) {
+            currencyCode = 'USD';
+        } else {
+            currencyCode = si.currencyCode;
+        }
+
+        fields = addNeededFieldsForProductLogic(fields);
+        Map<Id, SolarProductInventory> productToInventoryMap = createInventoryMapNew(skus, si.warehouseCode);
+        List<ProductData> productDataList = new List<B2BUtilProduct.ProductData>();
+        Map<Id, ProductData> productIdToProductData = new Map<Id, B2BUtilProduct.ProductData>();
+        ConnectApi.PricingInput priceInput;
+        if (!excludePricing) {
+            //instantiates pricing input objects.
+            priceInput = new ConnectApi.PricingInput();
+            priceInput.pricingLineItems = new List<ConnectApi.PricingLineItemInput>();
+        }
+        //Need to retain original sku list and create a working sku list
+        //ConnectApi.getProducts only allows 20 records to be retrieved at a single time.
+        //We need to repetitively make the call until all skus have been retrieved.
+        //We will break the list down, 20 at a time.
+        List<String> originalSkuList = new List<String>(skus);
+        List<String> workingSkuList = new List<String>(skus);
+        Boolean moreSkusToProcess = true;
+        while (moreSkusToProcess) {
+            List<String> workingSkus = new List<String>();
+            if (workingSkuList.size() > 20) {
+                for (Integer i = 1; i <= 20; i++) {
+                    workingSkus.add(workingSkuList.get(0));
+                    workingSkuList.remove(0);
+                }
+            } else {
+                workingSkus = new List<String>(workingSkuList);
+                moreSkusToProcess = false;
+            }
+            //Map<String, Object> prodOverviewCollectionUntyped;
+            ConnectApi.ProductOverviewCollection prodOverviewCollection;
+            if (Test.isRunningTest()) {
+                //prodOverviewCollectionUntyped = B2BUtilProductTest.makeTestProductOverviewCollection(workingSkuList);
+                prodOverviewCollection = B2BUtilProductTest.makeTestProductOverviewCollection(workingSkuList);
+
+            } else {
+                //prodOverviewCollectionUntyped = apiCommerceGetProducts(webstoreId, effAccountId, IdsOrSKus.SKU, workingSkus, fields, excludeMedia);
+                prodOverviewCollection = commerceCatalogGetProducts(webstoreId, effAccountId, IdsOrSKus.SKU, workingSkus, fields, excludeMedia);
+            }
+
+            Set<Id> sellableProductIds = new Set<Id>();
+            List<Object> apiBadOrNotSellableProducts = new List<Object>();
+            //List<Object> apiProductOverviewList = (List<Object>)prodOverviewCollectionUntyped.get('products');
+
+            for (ConnectApi.ProductOverview prodOverview : prodOverviewCollection.products) {
+                //for (Object apiObjectProductOverview : apiProductOverviewList) {
+                //Map<String, Object> apiProductOverview = (Map<String, Object>) apiObjectProductOverview;
+                ProductData prodData = new ProductData(prodOverview);
+                prodData.currencyCode = currencyCode;
+                prodData = prodData.addInventoryDataNew(productToInventoryMap.get(prodData.id));
+                if ((Boolean.valueOf(prodOverview.success) && (prodData.sellable))) {
+                    if (!excludePricing) {
+                        ConnectApi.PricingLineItemInput plii = new ConnectApi.PricingLineItemInput();
+                        plii.productId = prodData.id;
+                        priceInput.pricingLineItems.add(plii);
+                    }
+                    sellableProductIds.add(prodData.id);
+                } else {
+                    apiBadOrNotSellableProducts.add(prodOverview);
+                }
+                productDataList.add(prodData);
+                productIdToProductData.put(prodData.id, prodData);
+            }
+
+            if (!excludePricing) {
+                if (!priceInput.pricingLineItems.isEmpty()) {
+                    ConnectApi.PricingResult priceResult;
+                    if (Test.isRunningTest()) {
+                        priceResult = B2BUtilProductTest.makeTestCommerceStorePricing();
+                    } else {
+                        priceResult = ConnectApi.CommerceStorePricing.getProductPrices(webstoreId, effAccountId, priceInput);
+                    }
+
+                    //todo - check priceResult.success
+                    for (ConnectApi.PricingResultLineItem line : priceResult.pricingLineItemResults) {
+                        ProductData pd = productIdToProductData.get(line.productId);
+                        pd = pd.addPricingData(line, currencyCode);
+                    }
+                }
+            }
+        }
+
+        if (!excludeSupersession) {
+            B2BUtilProduct.addProductSupersessionData(productIdToProductData, originalSkuList);
+        }
+        productDataList = B2BUtilProduct.resolveFinalPartDatum(productDataList);
+        return productDataList;
+    }
+    
+    public static List<ProductData> getProductsBySkuBasic(
+        String webstoreId,
+        String effAccountId,
+        List<String> skus,
+        List<String> fields) {
+            if (Test.isRunningTest() && B2BUtilProductTest.testThrowException) {
+                throw new B2BException('Test case wants an exception thrown!');
+            }
+            if (skus.size() > 990) {
+                B2BLoggingUtil.error('general_logger', 'B2BUtilProduct', 'getProductsBySkuBasic', 0, 'Maximum products exceeded.  990 is max, you sent ' + skus.size(), null);
+                B2BLoggingUtil.flush();
+                throw new B2BException('Maximum products exceeded.  990 is max, you sent ' + skus.size());
+            }
+            B2BUtil.B2BSessionInformation si = B2BUtil.getSessionInformation();
+            String currencyCode = 'USD';
+            if (B2BUtil.isGuest() || si == null || si.areFactorsCurrent == false || String.isEmpty(si.currencyCode)) {
+                currencyCode = 'USD';
+            } else {
+                currencyCode = si.currencyCode;
+            }
+            
+            fields = addNeededFieldsForProductLogic(fields);
+            List<ProductData> productDataList = new List<B2BUtilProduct.ProductData>();
+            Map<Id, ProductData> productIdToProductData = new Map<Id, B2BUtilProduct.ProductData>();
+            //Need to retain original sku list and create a working sku list
+            //ConnectApi.getProducts only allows 20 records to be retrieved at a single time.
+            //We need to repetitively make the call until all skus have been retrieved.
+            //We will break the list down, 20 at a time.
+            List<String> workingSkuList = new List<String>(skus);
+            Boolean moreSkusToProcess = true;
+            while (moreSkusToProcess) {
+                List<String> workingSkus = new List<String>();
+                if (workingSkuList.size() > 20) {
+                    for (Integer i = 1; i <= 20; i++) {
+                        workingSkus.add(workingSkuList.get(0));
+                        workingSkuList.remove(0);
+                    }
+                } else {
+                    workingSkus = new List<String>(workingSkuList);
+                    moreSkusToProcess = false;
+                }
+                ConnectApi.ProductOverviewCollection prodOverviewCollection;
+                if (Test.isRunningTest()) {
+                    prodOverviewCollection = B2BUtilProductTest.makeTestProductOverviewCollection(workingSkuList);
+                } else {
+                    prodOverviewCollection = commerceCatalogGetProducts(webstoreId, effAccountId, IdsOrSKus.SKU, workingSkus, fields, true);
+                }
+                
+                for (ConnectApi.ProductOverview prodOverview : prodOverviewCollection.products) {
+                    ProductData prodData = new ProductData(prodOverview);
+                    prodData.currencyCode = currencyCode;
+                    productDataList.add(prodData);
+                    productIdToProductData.put(prodData.id, prodData);
+                }
+            }
+            return productDataList;
+        }
+
+
+    /**
+     * Maximum 500 products. Provide a list of product ids to return a List of ProductData.  This method will called components
+     * to get product data, prices, media, inventory and sell-ability rules.
+     * Will throw B2BException if more than 500 Skus are passed in.
+     *
+     * @param webstoreId String
+     * @param effAccountId String
+     * @param productIds List<String>
+     * @param fields List<String>
+     * @param excludeMedia Boolean
+     * @param excludePricing Boolean
+     * @param excludeSupersession Boolean
+     *
+     * @return List<ProductData>
+     *
+     * @throws B2BException Will be thrown when over 500 skus are given
+     *
+     * @see ScottB2BUtilProduct.ProductData
+     */
+    public static List<ProductData> getProductsById(
+            String webstoreId,
+            String effAccountId,
+            List<Id> productIds,
+            List<String> fields,
+            Boolean excludeMedia,
+            Boolean excludePricing,
+            Boolean excludeSupersession) {
+
+        if (Test.isRunningTest() && B2BUtilProductTest.testThrowException) {
+            throw new B2BException('Test case wants an exception thrown!');
+        }
+        if (productIds.size() > 500) {
+            B2BLoggingUtil.error('general_logger', 'B2BUtilProduct', 'getProductsById', 0, 'Maximum products exceeded.  500 is max, you sent ' + productIds.size(), null);
+            B2BLoggingUtil.flush();
+            throw new B2BException('Maximum products exceeded.  500 is max, you sent ' + productIds.size());
+        }
+        B2BUtil.B2BSessionInformation si = B2BUtil.getSessionInformation();
+        system.debug('si......>'+si);
+        String currencyCode = 'USD';
+        if (B2BUtil.isGuest() || si == null || si.areFactorsCurrent == false || String.isEmpty(si.currencyCode)) {
+            currencyCode = 'USD';
+        } else {
+            currencyCode = si.currencyCode;
+        }
+
+
+        fields = addNeededFieldsForProductLogic(fields);
+        Map<Id, SolarProductInventory> productToInventoryMap = createInventoryMapNew(productIds, si.warehouseCode);
+
+        List<ProductData> productDataList = new List<B2BUtilProduct.ProductData>();
+        Map<Id, ProductData> productIdToProductData = new Map<Id, B2BUtilProduct.ProductData>();
+        ConnectApi.PricingInput priceInput;
+        if (!excludePricing) {
+            priceInput = new ConnectApi.PricingInput();
+            priceInput.pricingLineItems = new List<ConnectApi.PricingLineItemInput>();
+        }
+        List<String> originalSkuList = new List<String>((List<String>) productIds);
+        List<String> workingSkuList = new List<String>((List<String>) productIds);
+        Boolean moreIdsToProcess = true;
+        while (moreIdsToProcess) {
+            List<String> workingIds = new List<String>();
+            if (workingSkuList.size() > 20) {
+                for (Integer i = 1; i <= 20; i++) {
+                    workingIds.add((String) workingSkuList.get(0));
+                    workingSkuList.remove(0);
+                }
+            } else {
+                workingIds = (List<String>) workingSkuList;
+                moreIdsToProcess = false;
+            }
+
+//            Map<String, Object> prodOverviewCollectionUntyped;
+            ConnectApi.ProductOverviewCollection prodOverviewCollection;
+            if (Test.isRunningTest()) {
+                //makeTestProductOverviewCollectionById method is created in B2BUtilProductTest class so that when we run the test class it fetches all data based on the ProductsIds
+                prodOverviewCollection = B2BUtilProductTest.makeTestProductOverviewCollectionById(workingSkuList);
+            } else {
+                //prodOverviewCollectionUntyped = apiCommerceGetProducts(webstoreId, effAccountId, IdsOrSKus.ID, workingIds, fields, excludeMedia);
+                prodOverviewCollection = commerceCatalogGetProducts(webstoreId, effAccountId, IdsOrSKus.ID, workingIds, fields, excludeMedia);
+            }
+
+            Set<Id> sellableProductIds = new Set<Id>();
+            List<Object> apiBadOrNotSellableProducts = new List<Object>();
+            //List<Object> apiProductOverviewList = (List<Object>)prodOverviewCollectionUntyped.get('products');
+
+            for (ConnectApi.ProductOverview prodOverview : prodOverviewCollection.products) {
+                //for (Object apiObjectProductOverview : apiProductOverviewList) {
+                //Map<String, Object> apiProductOverview = (Map<String, Object>) apiObjectProductOverview;
+                ProductData prodData = new ProductData(prodOverview);
+                prodData.currencyCode = currencyCode;
+                prodData = prodData.addInventoryDataNew(productToInventoryMap.get(prodData.id));
+                if ((Boolean.valueOf(prodOverview.success) && (prodData.sellable))) {
+                    if (!excludePricing) {
+                        ConnectApi.PricingLineItemInput plii = new ConnectApi.PricingLineItemInput();
+                        plii.productId = prodData.id;
+                        priceInput.pricingLineItems.add(plii);
+                    }
+                    sellableProductIds.add(prodData.id);
+                } else {
+                    apiBadOrNotSellableProducts.add(prodOverview);
+                }
+                productDataList.add(prodData);
+                productIdToProductData.put(prodData.id, prodData);
+            }
+
+            if (!excludePricing) {
+                if (!priceInput.pricingLineItems.isEmpty()) {
+                    ConnectApi.PricingResult priceResult;
+                    if (Test.isRunningTest()) {
+                        priceResult = B2BUtilProductTest.makeTestCommerceStorePricing();
+                    } else {
+                        priceResult = ConnectApi.CommerceStorePricing.getProductPrices(webstoreId, effAccountId, priceInput);
+                    }
+                    //todo - check priceResult.success
+                    for (ConnectApi.PricingResultLineItem line : priceResult.pricingLineItemResults) {
+                        ProductData pd = productIdToProductData.get(line.productId);
+                        pd = pd.addPricingData(line, currencyCode);
+                    }
+                }
+            }
+        }
+
+        if (!excludeSupersession) {
+            B2BUtilProduct.addProductSupersessionData(productIdToProductData, originalSkuList);
+        }
+        productDataList = B2BUtilProduct.resolveFinalPartDatum(productDataList);
+        return productDataList;
+    }
+
+
+    /**
+     * Will use ConnectApi.CommerceSearch.searchProducts to search and find products.
+     * Refer to Salesforce documentation on how to build input payload.  The return of pricing data
+     * and supersession data is optional.  Set the appropriate flags.
+     * The return wrapper will contain information from both the search call and ProductData to make
+     * ordering decisions about each product.
+     *
+     * @param webstoreId String
+     * @param effAccountId String
+     * @param input ConnectApi.ProductSearchInput
+     * @param excludePricing Boolean
+     * @param excludeSupersession Boolean
+     *
+     * @return ScottB2BUtilProduct.ProductSearchWrapper
+     *
+     * @see ConnectApi.ProductSearchInput
+     * @see ConnectApi.CommerceSearch.searchProducts
+     * @see ScottB2BUtilProduct.ProductSearchWrapper
+     */
+    public static ProductSearchWrapper getProductsBySearch(
+            String webstoreId,
+            String effAccountId,
+            ConnectApi.ProductSearchInput input,
+            Boolean excludePricing,
+            Boolean excludeSupersession) {
+        if (Test.isRunningTest() && B2BUtilProductTest.testThrowException) {
+            throw new B2BException('Test case wants an exception thrown!');
+        }
+
+        B2BUtil.B2BSessionInformation si = B2BUtil.getSessionInformation();
+        String currencyCode = 'USD';
+        if (B2BUtil.isGuest() || si == null || si.areFactorsCurrent == false || String.isEmpty(si.currencyCode)) {
+            currencyCode = 'USD';
+        } else {
+            currencyCode = si.currencyCode;
+        }
+
+        input.fields = addNeededFieldsForProductLogic(input.fields);
+
+        ConnectApi.ProductSearchResults result;
+        ProductSearchWrapper psw = new ProductSearchWrapper();
+        if (Test.isRunningTest()) {
+            result = B2BUtilProductTest.makeTestProductSearchResults();
+        } else {
+            if (String.isNotBlank(input.searchTerm)) {
+                //remove the sku: string, if present
+                Boolean entitled;
+                String productId;
+                String cleansedSku = input.searchTerm.replace('sku:','').trim();
+                List<Product2> prodBySkuSearch = [SELECT Id, StockKeepingUnit FROM Product2 WHERE StockKeepingUnit = :cleansedSku AND IsActive=TRUE];
+                if ((!prodBySkuSearch.isEmpty()) && (prodBySkuSearch.size()==1)) {
+                    input.searchTerm = ('sku:'+cleansedSku).toUpperCase();
+                    psw.soloProductId = prodBySkuSearch.get(0).Id;
+                    productId = prodBySkuSearch.get(0).Id;
+                    //check entitlement
+                    entitled = checkProductEntitled(webstoreId, effAccountId, productId);
+                    if (!entitled){
+                        psw.soloProductId = null;
+                    }
+
+                }
+            }
+            result = ConnectApi.CommerceSearch.searchProducts(webstoreId, effAccountId, input);
+        }
+
+
+        List<Id> productIds = new List<Id>();
+        for (ConnectApi.ProductSummary ps : result.productsPage.products) {
+            productIds.add(ps.id);
+        }
+
+        Map<Id, SolarProductInventory> productToInventoryMap = createInventoryMapNew(productIds, si.warehouseCode);
+
+        List<ProductData> productDataList = new List<B2BUtilProduct.ProductData>();
+        Map<Id, ProductData> productIdToProductData = new Map<Id, B2BUtilProduct.ProductData>();
+        ConnectApi.PricingInput priceInput;
+        if (!excludePricing) {
+            priceInput = new ConnectApi.PricingInput();
+            priceInput.pricingLineItems = new List<ConnectApi.PricingLineItemInput>();
+        }
+        List<String> originalSkuList = new List<String>((List<String>) productIds);
+
+        Set<Id> sellableProductIds = new Set<Id>();
+        List<ConnectApi.ProductSummary> badOrNotSellableProducts = new List<ConnectApi.ProductSummary>();
+
+        for (ConnectApi.ProductSummary prodSummary : result.productsPage.products) {
+            ProductData prodData = new ProductData(prodSummary);
+            prodData = prodData.addInventoryDataNew(productToInventoryMap.get(prodSummary.id));
+            if (prodData.sellable) {
+                if (!excludePricing) {
+                    ConnectApi.PricingLineItemInput plii = new ConnectApi.PricingLineItemInput();
+                    plii.productId = prodSummary.id;
+                    priceInput.pricingLineItems.add(plii);
+                }
+                sellableProductIds.add(prodSummary.id);
+            } else {
+                badOrNotSellableProducts.add(prodSummary);
+            }
+            productDataList.add(prodData);
+            productIdToProductData.put(prodData.id, prodData);
+        }
+
+        if (!excludePricing) {
+            if (!priceInput.pricingLineItems.isEmpty()) {
+                ConnectApi.PricingResult priceResult;
+                if (Test.isRunningTest()) {
+                    priceResult = B2BUtilProductTest.makeTestCommerceStorePricing();
+                } else {
+                    priceResult = ConnectApi.CommerceStorePricing.getProductPrices(webstoreId, effAccountId, priceInput);
+                }
+                //todo - check priceResult.success
+                for (ConnectApi.PricingResultLineItem line : priceResult.pricingLineItemResults) {
+                    ProductData pd = productIdToProductData.get(line.productId);
+                    pd = pd.addPricingData(line, currencyCode);
+                }
+            }
+        }
+
+        //need to figure out how to make this greater than 20.
+        if (!excludeSupersession) {
+            B2BUtilProduct.addProductSupersessionData(productIdToProductData, originalSkuList);
+        }
+
+        Map<Id, ProductData> mapIdToProdData = new Map<Id, B2BUtilProduct.ProductData>();
+        for (ProductData pd : productDataList) {
+            mapIdToProdData.put(pd.id, pd);
+        }
+        //build remainder of psw
+        psw.searchResults = result;
+        psw.productData = productDataList;
+        psw.mapOfProductIdToProductData = mapIdToProdData;
+        psw.productData = B2BUtilProduct.resolveFinalPartDatum(productDataList);
+
+        return psw;
+    }
+
+
+    /**
+     * Maximum 1 product. Provide an Id of product to return ProductData.  This method will call components
+     * to get product data, inventory and sell-ability rules and supersession chain .
+     *
+     * @param productId Id
+     *
+     * @return ProductData
+     *
+     * @see ScottB2BUtilProduct.ProductData
+     */
+    @AuraEnabled
+    public static ProductData getProductById(Id productId) {
+        
+        B2BUtil.B2BSessionInformation si = B2BUtil.getSessionInformation();
+
+        Map<Id, SolarProductInventory> productToInventoryMap = createInventoryMapNew(new List<Id>{
+                productId
+        }, si.warehouseCode);
+
+        ProductData productData;
+
+        Product2 product = [
+                SELECT Id,
+                        B2B_IsProductSellable__c,
+                        B2B_IsLatest__c,
+                        B2B_Replaced_By__c,
+                        B2B_IsSaleCategoryProduct__c,
+                        B2B_UNITS__c,
+                        B2B_PACK_QUANTITY__c,
+                        B2B_LEAD_TIME__c,
+                        StockKeepingUnit,
+                        IsActive
+                FROM Product2
+                WHERE Id = :productId
+        ];
+        productData = new ProductData(product);
+        productData = productData.addInventoryDataNew(productToInventoryMap.get(productId));
+
+        Map<Id, ProductData> productIdToProductData = new Map<Id, B2BUtilProduct.ProductData>();
+        productIdToProductData.put(productId, productData);
+
+        List<ProductData> productDataList = new List<B2BUtilProduct.ProductData>{
+                productData
+        };
+        B2BUtilProduct.addProductSupersessionData(productIdToProductData, new List<String>{
+                productData.sku
+        });
+        productDataList = B2BUtilProduct.resolveFinalPartDatum(productDataList);
+        return productDataList.get(0);
+    }
+
+
+    public class Children {
+        @AuraEnabled public List<Children> children;
+        @AuraEnabled public Integer productCount;        //589
+        @AuraEnabled public Category category;
+    }
+
+    public class Category {
+        @AuraEnabled public String description;
+        @AuraEnabled public String id;
+        @AuraEnabled public String name;
+        @AuraEnabled public String urlName;
+    }
+    public class CategoryContainer {
+        @AuraEnabled public Category category;
+        @AuraEnabled public List<Children> children;
+        @AuraEnabled public Integer productCount;
+    }
+
+    public class ProductsPage {
+        public Integer pageSize;
+        public List<Products> products;
+        public Integer total;
+        public String currencyIsoCode;
+    }
+
+    public class Products {
+        public Integer sequence;
+        public DefaultImage defaultImage;
+        public Map<String, String> fields;
+        public String id;
+        public String packagePartId;
+        public String name;
+        //public productClass productClass;
+        public ProductData productData;
+    }
+
+    //noinspection ApexUnusedDeclaration - Fields are based on ConnectApi data
+    public class DefaultImage {
+        @AuraEnabled public String alternateText;
+        @AuraEnabled public String contentVersionId;
+        @AuraEnabled public String id;
+        @AuraEnabled public String mediaType;
+        @AuraEnabled public Integer sortOrder;
+        @AuraEnabled public String thumbnailUrl;
+        @AuraEnabled public String title;
+        @AuraEnabled public String url;
+    }
+
+    /**
+     * Wrapper class to hold the input parameters for the Package PLP data retrieval process.
+     * <p/>
+     * - packageId String The package Id, Should be persistent across the package PLP calls
+     * - systemOrSubsystemRefinement String The Category Tree will hold these Ids and should be sent when a user clicks into the tree
+     * - fields List<String> List of Desired fields to be retrieved
+     * - includePrices Boolean True if you want prices returned, false will skip pricing call
+     * - includeQuantityRule Boolean True if you want quantity rules returned
+     * - page Integer Zero (0) based page number
+     * - pageSize Integer Number of items on the page
+     * - searchTerm String User entered search term for the package search field
+     * - sortColumn String the API field name (from B2B_PackagePart__c) to order the results bty
+     * -
+     */
+    public class ProductPackageSearchInput {
+        public String packageId;
+        public String systemOrSubsystemRefinement;
+        public List<String> fields;
+        public Boolean includePrices;
+        public Boolean includeQuantityRule;
+        public Integer page;
+        public Integer pageSize;
+        public String searchTerm;
+        public String sortColumn;
+        public String direction;
+    }
+
+    public class ProductDataForPackage {
+        public CategoryContainer categories;
+        public List<String> facets = new List<String>();
+        public String locale;
+        public ProductsPage productsPage;
+
+    }
+
+
+    /**
+     * @param webstoreId String - Webstore Id
+     * @param effAccountId String - Effective Account Id
+     * @param input ProductPackageSearchInput - Hold acceptable values to build the package payload
+     *
+     * @return ProductPackageWrapper
+     *
+     * @see ScottB2BUtilProduct.ProductPackageSearchInput
+     * @see ScottB2BUtilProduct.ProductPackageWrapper
+     */
+    public static ProductPackageWrapper getPartsByPackage(
+            String webstoreId,
+            String effAccountId,
+            ProductPackageSearchInput input) {
+
+        String sortDirection = String.isNotBlank(input.direction) ? input.direction : 'ASC';
+        Map<String, List<B2B_PackagePart__c>> skuPartMap = new Map<String, List<B2B_PackagePart__c>>();
+        String partsQuery;
+
+        //making SystemorSubSystem value blank so that input search term data returns on the package level
+        if(String.isNotBlank(input.searchTerm)) {
+            input.systemOrSubsystemRefinement = '';
+        }
+
+        if (String.isBlank(input.systemOrSubsystemRefinement) || String.isNotBlank(input.searchTerm)) {
+            //We are either at the package level or user has entered a search term
+            String thePackageId = input.packageId;
+            String partsWhere = '';
+            if (String.isNotBlank(input.searchTerm)) {
+                String srch = '%' + String.escapeSingleQuotes(input.searchTerm) + '%';
+                partsWhere = ' AND (B2B_PartName__c LIKE :srch OR B2B_PartNumber__c LIKE :srch OR B2B_RefDes__c LIKE :srch) ';
+            }
+            partsQuery = 'SELECT B2B_Callout__c, B2B_ExternalId__c, B2B_Package__c, B2B_PackageSubSystem__c, B2B_PackageSystem__c, ' +
+                    '        B2B_PartName__c,B2B_PartNumber__c, B2B_Product__c, B2B_Quantity__c, B2B_RefDes__c, ' +
+                    '        B2B_SystemExternalId__c, Name, Id ' +
+                    'FROM B2B_PackagePart__c ' +
+                    'WHERE B2B_Package__r.Id = :thePackageId ' +
+                    partsWhere +
+                    'ORDER BY ' + input.sortColumn + ' ' + sortDirection + ' ' +
+                    'LIMIT ' + input.pageSize + ' OFFSET ' + (input.page * input.pageSize) ;
+        } else {
+            //This section is when user has clicked in the "category tree"  We need to get
+            //products either at the System or Sub-System level
+            List<String> catParts = input.systemOrSubsystemRefinement.split('~');
+            Id catId = catParts.get(0);
+            if (catParts.get(1).equalsIgnoreCase('System')) {
+                //We are at the system level
+                partsQuery = 'SELECT B2B_Callout__c, B2B_ExternalId__c, B2B_Package__c, B2B_PackageSubSystem__c, B2B_PackageSystem__c, ' +
+                        '        B2B_PartName__c,B2B_PartNumber__c, B2B_Product__c, B2B_Quantity__c, B2B_RefDes__c, ' +
+                        '        B2B_SystemExternalId__c, Name, Id ' +
+                        'FROM B2B_PackagePart__c ' +
+                        'WHERE B2B_PackageSystem__r.Id = :catId ' +
+                        'ORDER BY ' + input.sortColumn + ' ' + sortDirection + ' ' +
+                        'LIMIT ' + input.pageSize + ' OFFSET ' + (input.page * input.pageSize);
+            } else {
+                //We are at the sub-system level
+                partsQuery = 'SELECT B2B_Callout__c, B2B_ExternalId__c, B2B_Package__c, B2B_PackageSubSystem__c, B2B_PackageSystem__c, ' +
+                        '        B2B_PartName__c,B2B_PartNumber__c, B2B_Product__c, B2B_Quantity__c, B2B_RefDes__c, ' +
+                        '        B2B_SystemExternalId__c, Name, Id ' +
+                        'FROM B2B_PackagePart__c ' +
+                        'WHERE B2B_PackageSubSystem__r.Id = :catId ' +
+                        'ORDER BY ' + input.sortColumn + ' ' + sortDirection + ' ' +
+                        'LIMIT ' + input.pageSize + ' OFFSET ' + (input.page * input.pageSize);
+            }
+        }
+
+
+        List<B2B_PackagePart__c> parts = Database.query(partsQuery); //NOPMD ST 2025-10-21 uses binds and proper escaping
+
+
+        for (B2B_PackagePart__c part : parts) {
+            //skusToFind.add(part.B2B_PartNumber__c);
+            if (!skuPartMap.containsKey(part.B2B_PartNumber__c)) {
+                skuPartMap.put(part.B2B_PartNumber__c, new List<B2B_PackagePart__c>());
+            }
+            skuPartMap.get(part.B2B_PartNumber__c).add(part);
+        }
+        List<String> skus = new List<String>(skuPartMap.keySet());
+        Set<String> skusFoundByConnectApi = new Set<String>();
+
+
+        if (skus.size() > 500) {
+            B2BLoggingUtil.error('general_logger', 'B2BUtilProduct', 'getProductsBySku', 0, 'Maximum products exceeded.  500 is max, you sent ' + skus.size(), null);
+            B2BLoggingUtil.flush();
+            throw new B2BException('Maximum products exceeded.  500 is max, you sent ' + skus.size());
+        }
+        B2BUtil.B2BSessionInformation si = B2BUtil.getSessionInformation();
+        String currencyCode = 'USD';
+        if (B2BUtil.isGuest() || si == null || si.areFactorsCurrent == false || String.isEmpty(si.currencyCode)) {
+            currencyCode = 'USD';
+        } else {
+            currencyCode = si.currencyCode;
+        }
+        input.fields = addNeededFieldsForProductLogic(input.fields);
+        Map<Id, SolarProductInventory> productToInventoryMap = createInventoryMapNew(skus, si.warehouseCode);
+
+        List<ProductData> productDataList = new List<B2BUtilProduct.ProductData>();
+        Map<Id, ProductData> productIdToProductData = new Map<Id, B2BUtilProduct.ProductData>();
+        ConnectApi.PricingInput priceInput;
+        if (input.includePrices) {
+            //instantiates pricing input objects.
+            priceInput = new ConnectApi.PricingInput();
+            priceInput.pricingLineItems = new List<ConnectApi.PricingLineItemInput>();
+        }
+        //Need to retain original sku list and create a working sku list
+        //ConnectApi.getProducts only allows 20 records to be retrieved at a single time.
+        //We need to repetitively make the call until all skus have been retrieved.
+        //We will break the list down, 20 at a time.
+        List<String> originalSkuList = new List<String>(skus);
+        List<String> workingSkuList = new List<String>(skus);
+        Boolean moreSkusToProcess = true;
+        while (moreSkusToProcess) {
+            List<String> workingSkus = new List<String>();
+            if (workingSkuList.size() > 20) {
+                for (Integer i = 1; i <= 20; i++) {
+                    workingSkus.add(workingSkuList.get(0));
+                    workingSkuList.remove(0);
+                }
+            } else {
+                workingSkus = new List<String>(workingSkuList);
+                moreSkusToProcess = false;
+            }
+            //Map<String, Object> prodOverviewCollectionUntyped;
+            ConnectApi.ProductOverviewCollection prodOverviewCollection;
+            if (Test.isRunningTest()) {
+                //prodOverviewCollectionUntyped = B2BUtilProductTest.makeTestProductOverviewCollection(new List<String> {'T-1914970-1'});
+                prodOverviewCollection = B2BUtilProductTest.makeTestProductOverviewCollection(workingSkuList);
+            } else {
+                //prodOverviewCollectionUntyped = apiCommerceGetProducts(webstoreId, effAccountId, IdsOrSKus.SKU, workingSkus, input.fields, false);
+                prodOverviewCollection = commerceCatalogGetProducts(webstoreId, effAccountId, IdsOrSKus.SKU, workingSkus, input.fields, false);
+
+
+            }
+
+            Set<Id> sellableProductIds = new Set<Id>();
+            List<Object> apiBadOrNotSellableProducts = new List<Object>();
+            //List<Object> apiProductOverviewList = (List<Object>)prodOverviewCollectionUntyped.get('products');
+
+
+            for (ConnectApi.ProductOverview prodOverview : prodOverviewCollection.products) {
+                //for (Object apiObjectProductOverview : apiProductOverviewList) {
+                if (String.isBlank(prodOverview.sku)) {
+                    continue;
+                }
+                //Map<String, Object> apiProductOverview = (Map<String, Object>) apiObjectProductOverview;
+                ProductData prodData = new ProductData(prodOverview);
+                //prodOverview.sku
+                prodData = prodData.addInventoryDataNew(productToInventoryMap.get(prodData.id));
+                if ((Boolean.valueOf(prodOverview.success) && (prodData.sellable))) {
+                    if (input.includePrices) {
+                        ConnectApi.PricingLineItemInput plii = new ConnectApi.PricingLineItemInput();
+                        plii.productId = prodData.id;
+                        priceInput.pricingLineItems.add(plii);
+                    }
+                    sellableProductIds.add(prodData.id);
+                } else {
+                    sellableProductIds.add(prodData.id);
+                    apiBadOrNotSellableProducts.add(prodOverview);
+                }
+                productDataList.add(prodData);
+                productIdToProductData.put(prodData.id, prodData);
+                skusFoundByConnectApi.add(prodData.sku);
+            }
+            if (input.includePrices) {
+                if (!priceInput.pricingLineItems.isEmpty()) {
+                    ConnectApi.PricingResult priceResult;
+                    if (Test.isRunningTest()) {
+                        priceResult = B2BUtilProductTest.makeTestCommerceStorePricing();
+                    } else {
+                        priceResult = ConnectApi.CommerceStorePricing.getProductPrices(webstoreId, effAccountId, priceInput);
+                    }
+
+                    for (ConnectApi.PricingResultLineItem line : priceResult.pricingLineItemResults) {
+                        ProductData pd = productIdToProductData.get(line.productId);
+                        pd = pd.addPricingData(line, currencyCode);
+                    }
+                }
+            }
+        }
+
+        //Always get supersession data for package plp
+        B2BUtilProduct.addProductSupersessionData(productIdToProductData, originalSkuList);
+        productDataList = B2BUtilProduct.resolveFinalPartDatum(productDataList);
+
+        Set<String> allSkus = new Set<String>(skuPartMap.keySet());
+
+        Set<String> skusNotFound = new Set<String>(allSkus);
+
+        skusNotFound.removeAll(skusFoundByConnectApi);
+
+        Map<Id, ProductData> mapIdToProdData = new Map<Id, B2BUtilProduct.ProductData>();
+        Map<String, ProductData> mapSkuToProdData = new Map<String, B2BUtilProduct.ProductData>();
+        for (ProductData pd : productDataList) {
+
+            if (String.isNotBlank(pd.id)) {
+                mapIdToProdData.put(pd.id, pd);
+                mapSkuToProdData.put(pd.sku, pd);
+            }
+        }
+        List<ProductData> allPartsProductDataList = new List<B2BUtilProduct.ProductData>();
+        for (B2B_PackagePart__c part : parts) {
+            String partNumber = part.B2B_PartNumber__c;
+            if (mapSkuToProdData.containsKey(partNumber)) {
+                ProductData pd = mapSkuToProdData.get(partNumber);
+                pd.packagePartQuantity = part.B2B_Quantity__c;
+                pd.packagePartId = part.Id;
+                pd.fields.put('Description', part.B2B_PartName__c.toLowerCase().capitalize());
+                allPartsProductDataList.add(pd);
+            } else {
+                ProductData pd = new ProductData(partNumber);
+                pd.packagePartQuantity = part.B2B_Quantity__c;
+                pd.packagePartId = part.Id;
+                pd.fields.put('Description', part.B2B_PartName__c.toLowerCase().capitalize());
+                allPartsProductDataList.add(pd);
+            }
+        }
+
+        Integer totalProductCount;
+        CategoryContainer packageCategories = new CategoryContainer();
+        Category category = new Category();
+        packageCategories.children = new List<B2BUtilProduct.Children>();
+
+        //Map<Id, Integer> systemCounts = new Map<Id, Integer>();
+        Map<Id, Integer> subsystemCounts = new Map<Id, Integer>();
+        List<B2B_Package__c> packageData;
+        if (String.isBlank(input.systemOrSubsystemRefinement)) {
+            //User is in Package
+            category.description = 'All Systems';
+            category.id = null;
+            category.name = 'All Systems';
+            category.urlName = null;
+            packageCategories.category = category;
+
+            String thePackageId = input.packageId;
+            String partsWhere = '';
+            if (String.isNotBlank(input.searchTerm)) {
+                String srch = '%' + String.escapeSingleQuotes(input.searchTerm) + '%';
+                partsWhere = ' AND (B2B_PartName__c LIKE :srch OR B2B_PartNumber__c LIKE :srch OR B2B_RefDes__c LIKE :srch) ';
+            }
+//            String soqlForPackageData =
+//                    'SELECT Id, B2B_PackageLevel__c, B2B_Section__c, B2B_TotalPartsCount__c ' +
+//                    'FROM B2B_Package__c ' +
+//                    'WHERE B2B_PackageLevel__c = \'System\' AND B2B_HeaderId__r.Id = :thePackageId ';
+            //+                     partsWhere;
+            //packageData = Database.query(soqlForPackageData);
+
+            packageData = [
+                    SELECT Id, B2B_PackageLevel__c, B2B_Section__c, B2B_TotalPartsCount__c
+                    FROM B2B_Package__c
+                    WHERE B2B_PackageLevel__c = 'System' AND B2B_HeaderId__r.Id = :input.packageId
+            ];
+
+
+//            if (String.isNotBlank(partsWhere)) {
+//                String soqlForPackageData =
+//                        'SELECT COUNT(Id) numParts, B2B_PackageSystem__r.Id ' +
+//                                'FROM B2B_PackagePart__c ' +
+//                                'WHERE B2B_Package__r.Id = :thePackageId ' + partsWhere +
+//                                ' GROUP BY B2B_PackageSystem__r.Id ';
+//
+//                List<AggregateResult> aggRes = Database.query(soqlForPackageData);
+//
+//                for (AggregateResult aggsRes : aggRes) {
+//                    Id subSysId = (Id) aggsRes.get('Id');
+//                    Integer numParts = (Integer) aggsRes.get('numParts');
+//                    systemCounts.put(subSysId, numParts);
+//                }
+//            }
+
+
+
+
+            String soqlForProductCount = 'SELECT COUNT() FROM B2B_PackagePart__c WHERE B2B_Package__r.Id = :thePackageId ' +
+                    partsWhere;
+            //totalProductCount = [SELECT COUNT() FROM B2B_PackagePart__c WHERE B2B_Package__r.Id = :input.packageId];
+
+            totalProductCount = Database.countQuery(soqlForProductCount);
+            packageCategories.productCount = totalProductCount;
+
+            if (String.isNotBlank(partsWhere)) {
+                //Clear out package list, we do not want a child to show up for searches
+                packageData.clear();
+            }
+
+        } else {
+            List<String> catParts = input.systemOrSubsystemRefinement.split('~');
+            if(catParts != null){
+                if (catParts.get(1).equalsIgnoreCase('System')) {
+                    //User clicked on system
+                    packageData = [
+                            SELECT Id, B2B_PackageLevel__c, B2B_Section__c, B2B_TotalPartsCount__c, B2B_ParentSystem__r.B2B_Section__c
+                            FROM B2B_Package__c
+                            WHERE B2B_ParentSystem__r.Id = :catParts.get(0)
+                    ];
+                    for (AggregateResult aggRes : [
+                            SELECT COUNT(Id) numParts, B2B_PackageSubSystem__r.Id
+                            FROM B2B_PackagePart__c
+                            WHERE B2B_PackageSystem__r.Id = :catParts.get(0)
+                            GROUP BY B2B_PackageSubSystem__r.Id
+                    ]) {
+                        Id subSysId = (Id) aggRes.get('Id');
+                        Integer numParts = (Integer) aggRes.get('numParts');
+                        subsystemCounts.put(subSysId, numParts);
+                    }
+                    category.description = packageData.get(0).B2B_ParentSystem__r.B2B_Section__c;
+                    category.id = null;
+                    category.name = packageData.get(0).B2B_ParentSystem__r.B2B_Section__c;
+                    category.urlName = null;
+                    packageCategories.category = category;
+                    totalProductCount = [SELECT COUNT() FROM B2B_PackagePart__c WHERE B2B_PackageSystem__r.Id = :catParts.get(0)];
+                    packageCategories.productCount = totalProductCount;
+                } else {
+                    //User clicked on Subsystem
+                    packageData = [
+                            SELECT Id, B2B_PackageLevel__c, B2B_Section__c, B2B_TotalPartsCount__c, B2B_ParentSystem__r.B2B_Section__c
+                            FROM B2B_Package__c
+                            WHERE Id = :catParts.get(0)
+                    ];
+                    category.description = packageData.get(0).B2B_Section__c;
+                    category.id = null;
+                    category.name = packageData.get(0).B2B_Section__c;
+                    category.urlName = null;
+                    packageCategories.category = category;
+                    totalProductCount = [SELECT COUNT() FROM B2B_PackagePart__c WHERE B2B_PackageSubSystem__r.Id = :catParts.get(0)];
+                    packageCategories.productCount = totalProductCount;
+                    //Clear out list, we do not want a child to show up for sub-systems
+                    packageData.clear();
+                }
+            }
+
+        }
+
+        for (B2B_Package__c systems : packageData) {
+            Children children = new Children();
+            Category childCategory = new Category();
+            childCategory.description = systems.B2B_Section__c;
+            childCategory.id = systems.Id + '~' + systems.B2B_PackageLevel__c;
+            childCategory.name = systems.B2B_Section__c;
+            childCategory.urlName = null;
+            if (subsystemCounts.isEmpty()) {
+                children.productCount = Integer.valueOf(systems.B2B_TotalPartsCount__c);
+            } else {
+                children.productCount = subsystemCounts.get(systems.Id);
+            }
+//
+//            if ((subsystemCounts==null) || (subsystemCounts.isEmpty())) {
+//                if (String.isNotBlank(input.searchTerm)) {
+//                    children.productCount = (systemCounts == null) ? 0 : (systemCounts.get(systems.Id) ?? 0);
+//                } else {
+//                    children.productCount = Integer.valueOf(systems.B2B_TotalPartsCount__c);
+//                }
+//            } else {
+//                children.productCount = subsystemCounts.get(systems.Id) ?? 0;
+//            }
+
+            children.category = childCategory;
+            children.children = new List<B2BUtilProduct.Children>();
+            packageCategories.children.add(children);
+        }
+
+        List<Products> prods = new List<B2BUtilProduct.Products>();
+        Integer i = 1;
+        for (ProductData pData : allPartsProductDataList) {
+            if (String.isBlank(pData.id)) {
+                Products prod = new Products();
+                prod.sequence = i;
+                pData.sequence = i;
+                prod.id = '';
+                prod.packagePartId = pData.packagePartId;
+                prod.name = pData.sku;
+                prod.productData = pData;
+                prods.add(prod);
+            } else {
+                Products prod = new Products();
+                prod.id = pData.id;
+                prod.packagePartId = pData.packagePartId;
+                prod.sequence = i;
+                pData.sequence = i;
+                prod.name = pData.fields.get('Name');
+                prod.productData = pData;
+                prods.add(prod);
+            }
+            i++;
+        }
+
+        ProductPackageWrapper ppw = new ProductPackageWrapper();
+        ppw.searchResults = new ProductDataForPackage();
+        ppw.searchResults.locale = 'en_us';
+        ppw.searchResults.productsPage = new ProductsPage();
+        ppw.searchResults.productsPage.currencyIsoCode = currencyCode;
+        ppw.searchResults.productsPage.products = prods;
+        ppw.searchResults.productsPage.total = totalProductCount;
+        ppw.searchResults.categories = packageCategories;
+
+        ppw.productData = allPartsProductDataList;
+        ppw.mapOfProductIdToProductData = mapIdToProdData;
+
+        system.debug('End Return@@'+ppw);
+        return ppw;
+
+    }
+
+
+    /**
+     * Provide a list of product2 records to return a List of bare bone minimum ProductData.  This method will call components
+     * to get only basic product data and final part dataum.  This can be used to determine if a part has any final part
+     * and if the current and/or final parts are sellable.  This method will not call any ConnectApi methods.
+     *
+     * @param products List<Product2> List of products to get data for
+     *
+     * @return List<ProductData>
+     *
+     * @see ScottB2BUtilProduct.ProductData
+     */
+    public static List<ProductData> getProductDataNoFrillsByProduct2(List<Product2> products) {
+        List<String> productIds = new List<String>();
+        for (Product2 prod : products) {
+            productIds.add(prod.Id);
+        }
+        B2BUtil.B2BSessionInformation si = B2BUtil.getSessionInformation();
+
+        Map<Id, SolarProductInventory> productToInventoryMap = createInventoryMapNew(productIds, si.warehouseCode);
+
+        List<ProductData> productDataList = new List<B2BUtilProduct.ProductData>();
+        Map<Id, ProductData> productIdToProductData = new Map<Id, B2BUtilProduct.ProductData>();
+
+        Set<Id> sellableProductIds = new Set<Id>();
+        List<Object> apiBadOrNotSellableProducts = new List<Object>();
+
+        for (Product2 prod : products) {
+            ProductData prodData = new ProductData(prod);
+            prodData = prodData.addInventoryDataNew(productToInventoryMap.get(prodData.id));
+            if (prodData.sellable) {
+                sellableProductIds.add(prodData.id);
+            } else {
+                apiBadOrNotSellableProducts.add(prod);
+            }
+            productDataList.add(prodData);
+            productIdToProductData.put(prodData.id, prodData);
+        }
+
+        productDataList = B2BUtilProduct.resolveFinalPartDatum(productDataList);
+        return productDataList;
+    }
+
+    /**
+     * @description Takes one product and will determine if it is entitled to the webstore and account.
+     *
+     * @param webstoreId String (Id)
+     * @param effectiveAccountId String (Id)
+     * @param productId String (Id)
+     *
+     * @return Boolean true if product is found and entitled, otherwise false
+     */
+    public static Boolean checkProductEntitled(String webstoreId, String effectiveAccountId, String productId) {
+        Boolean result = false;
+        try {
+            //Will throw an exception if the product is not entitled or found
+            ConnectApi.CommerceCatalog.getProduct(
+                    webstoreId, productId, effectiveAccountId ,null,
+                    null, true,true,true,true,true,true,true,'false'
+            );
+            result = true;
+        } catch (ConnectApi.NotFoundException noProduct) {
+            result = false;
+        }
+        return result;
+    }
+
+}
