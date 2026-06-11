@@ -1,0 +1,66 @@
+import { LightningElement, api } from 'lwc';
+import { PageLabelStoreMixin } from 'c/b2bPageLabelStoreMixin';
+import { transformData } from './dataNormalizer';
+import { genUtil, inventoryUtil } from 'c/b2bUtil';
+
+export default class B2BProductInventory extends PageLabelStoreMixin(LightningElement) {
+
+    constructor() {
+        super('b2bProductInventory b2bBadges', true);
+    }
+
+    async connectedCallback() {
+        if (!super.labels || genUtil.isProxyEmpty(super.labels)) {
+            await super.connectedCallback();
+        }
+    }
+
+    _inventory;
+    _displayType;
+    _data;
+
+    @api
+    set inventory(val) {
+        this._inventory = val;
+        this.update();
+    }
+
+    get inventory() {
+        return this._inventory;
+    }
+
+    @api
+    set displayType(val) {
+        this._displayType = val;
+        this.update();
+    }
+
+    get displayType() {
+        return this._displayType;
+    }
+
+    update() {
+        if (!this._inventory) return;
+        this._data = transformData(
+            this._inventory,
+            this._displayType,
+            inventoryUtil
+        );
+    }
+
+    get data() {
+        return this._data;
+    }
+
+    get showCurrentAvailability() {
+        return this._data?.purchase?.currentRow?.showAvailability ?? false;
+    }
+
+    get showGlobalAvailability() {
+        return this._data?.purchase?.globalRow?.showAvailability ?? false;
+    }
+
+    get listTooltipText() {
+        return this._data?.list?.tooltipText || '';
+    }
+}
