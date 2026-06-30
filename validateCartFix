@@ -1,30 +1,63 @@
-async validateCartItems(){
-        const unavailableProducts = [];
-        const replacedParts = [];
-        const partsToAdd = [];
-        if(this.cartItems.length > this.cart_ItemLimit){
-            
-            this.isLimitExcedeed = true;
-            this.isLoading = false;
-            return;
-        }else{
-            this.isLimitExcedeed = false;
-        }
-        this.cartItems.forEach((x) => {
-            console.log('this cartItems...>',x);
+async validateCartItems() {
+    const unavailableProducts = [];
+    const replacedParts = [];
+    const partsToAdd = [];
 
-        /** UnavailableProducts: tracks the products that aren't available (ex: status- ItemUnavailable,not a solar product)
-        *   also selected quantity greater than available quantity and also don't have any replaced parts with enough quantity
-        */
-            if(x.itemStatus === super.labels.notSolarPartOrgcart ||((x.itemStatus === super.labels.itemUnavailableOrgCart || x.itemStatus === super.labels.outOfStock || x.itemStatus === super.labels.inStock || x.itemStatus === super.labels.labelLimitedStock) && (x.quantity > x.purchaseLimit || x.purchaseLimit==0) && (x.finalPart=='' || x.finalPartId=='' || x.finalPartPurchaseLimit==0 || (x.finalPartId && x.finalPartPurchaseLimit && x.quantity > x.finalPartPurchaseLimit)))){
-                unavailableProducts.push({
-                    sku:x.sku,
-                    cartItemId : x.cartItemId
-                });
-            }else{
-            //adds products with replaced information when original product quantity is not available than selected
-            if(x.quantity > x.purchaseLimit){
-                if(x.finalPart && this.isValidSfId(x.finalPartId) && x.finalPartPurchaseLimit > 0){
+    if (this.cartItems.length > this.cart_ItemLimit) {
+        this.isLimitExcedeed = true;
+        this.isLoading = false;
+        return;
+    } else {
+        this.isLimitExcedeed = false;
+    }
+
+    this.cartItems.forEach((x) => {
+        console.log('this cartItems...>', x);
+
+        // ✅ NEW: derive purchaseLimit from inventory
+        const inventory = x.inventory || {};
+        const purchaseLimit = inventory.allowBackOrder
+            ? 99999
+            : (inventory.globalWarehouseInventory || 0);
+
+        // attach back if needed later
+        x.purchaseLimit = purchaseLimit;
+
+        /** UnavailableProducts logic */
+        if (
+            x.itemStatus === super.labels.notSolarPartOrgcart ||
+            (
+                (
+                    x.itemStatus === super.labels.itemUnavailableOrgCart ||
+                    x.itemStatus === super.labels.outOfStock ||
+                    x.itemStatus === super.labels.inStock ||
+                    x.itemStatus === super.labels.labelLimitedStock
+                ) &&
+                (x.quantity > purchaseLimit || purchaseLimit === 0) &&
+                (
+                    x.finalPart === '' ||
+                    x.finalPartId === '' ||
+                    x.finalPartPurchaseLimit === 0 ||
+                    (
+                        x.finalPartId &&
+                        x.finalPartPurchaseLimit &&
+                        x.quantity > x.finalPartPurchaseLimit
+                    )
+                )
+            )
+        ) {
+            unavailableProducts.push({
+                sku: x.sku,
+                cartItemId: x.cartItemId
+            });
+        } else {
+            // replacement logic
+            if (x.quantity > purchaseLimit) {
+                if (
+                    x.finalPart &&
+                    this.isValidSfId(x.finalPartId) &&
+                    x.finalPartPurchaseLimit > 0
+                ) {
                     replacedParts.push({
                         cartItemId: x.cartItemId,
                         item: x.sku,
@@ -40,121 +73,65 @@ async validateCartItems(){
                 }
             }
         }
-        });
+    });
 
-        // logic to check duplicate items which are exceeding
-        // purchase limit when all grouped together
-        const grouped = this.cartItems.reduce((duplicateProducts, item) => {
-            if (!duplicateProducts[item.sku]) {
-                duplicateProducts[item.sku] = {count : 0, quantity : 0 , cartItemIds : [], purchaseLimit : item.purchaseLimit };
-            }
-
-            duplicateProducts[item.sku].count += 1;
-            duplicateProducts[item.sku].quantity += item.quantity;
-            duplicateProducts[item.sku].cartItemIds.push(item.cartItemId);
-
-            return duplicateProducts;
-        }, {});
-
-        //logic to add all the grouped items if they are exceeding the purchase limit
-        for (const [sku, {count,quantity,cartItemIds,purchaseLimit}] of Object.entries(grouped)) {
-            if (count > 1 && quantity > purchaseLimit) {
-                cartItemIds.map(x=>{
-                    unavailableProducts.push({
-                        sku: sku,
-                        cartItemId : x
-                    })
-                })
-            }
+    // ✅ grouped duplicate validation (uses updated purchaseLimit)
+    const grouped = this.cartItems.reduce((duplicateProducts, item) => {
+        if (!duplicateProducts[item.sku]) {
+            duplicateProducts[item.sku] = {
+                count: 0,
+                quantity: 0,
+                cartItemIds: [],
+                purchaseLimit: item.purchaseLimit
+            };
         }
 
-        // filtering the replacement products array to exclude the unavailable items
+        duplicateProducts[item.sku].count += 1;
+        duplicateProducts[item.sku].quantity += item.quantity;
+        duplicateProducts[item.sku].cartItemIds.push(item.cartItemId);
 
-        if(replacedParts.length > 0){
+        return duplicateProducts;
+    }, {});
+
+    for (const [sku, { count, quantity, cartItemIds, purchaseLimit }] of Object.entries(grouped)) {
+        if (count > 1 && quantity > purchaseLimit) {
+            cartItemIds.forEach(id => {
+                unavailableProducts.push({
+                    sku,
+                    cartItemId: id
+                });
+            });
+        }
+    }
+
+    // ✅ filter replaced parts
+    if (replacedParts.length > 0) {
         const filtered = replacedParts.filter(item =>
-            !unavailableProducts.some(filterItem => filterItem.cartItemId === item.cartItemId)
+            !unavailableProducts.some(f => f.cartItemId === item.cartItemId)
         );
         replacedParts.length = 0;
         replacedParts.push(...filtered);
     }
 
-        //capturing the cartItems that are unavailable
-        if(unavailableProducts.length > 0){
-            unavailableProducts.reduce((acc, item) => {
-                acc[item.id] = item;
-                return acc;
-            }, {});
-        }
+    // rest of your logic remains SAME ↓↓↓
+    // (modals, process calls, etc.)
+    
+    if (unavailableProducts.length > 0) {
+        const result = await validateAddToCart.open({
+            size: 'small',
+            content: unavailableProducts,
+            cartValidation: true,
+            headerTitle: super.labels.itemInsufficientOrgCart,
+            unavailable: true,
+            labelText: super.labels.stockAvailabilityNotice,
+            buttonContinue: super.labels.continue,
+            buttonCancel: super.labels.Cancel,
+            bottomMessage: super.labels.cartUnavailableOrgModalMessage,
+            replaced: false
+        });
 
-        //takes user's confirmation to move ahead with only available products
-        if(unavailableProducts.length > 0){
-            const result = await validateAddToCart.open({
-                size: 'small',
-                content: unavailableProducts,
-                cartValidation: true,
-                headerTitle: super.labels.itemInsufficientOrgCart,
-                unavailable: true,
-                labelText: super.labels.stockAvailabilityNotice,
-                buttonContinue: super.labels.continue,
-                buttonCancel: super.labels.Cancel,
-                bottomMessage: super.labels.cartUnavailableOrgModalMessage,
-                replaced: false
-            });
-            if(result && result!='WOReplace'){
-                if(replacedParts.length > 0){
-
-                    const response = await validateAddToCart.open({
-                        size: 'small',
-                        content: replacedParts,
-                        headerTitle: super.labels.unavailableListItemsReplaceorgcart,
-                        unavailable: false,
-                        labelText: super.labels.replacementOfferedText,
-                        buttonContinue: super.labels.continueReplacement,
-                        buttonCancel: super.labels.continueWoReplacement,
-                        columnTitle: super.labels.originalItemColumnTitle,
-                        replaced: true
-                    });
-                    if(response && response!='WOReplace'){
-                        //replacing parts if continue with replacements
-                        partsToAdd.forEach(part => {
-                            const source = replacedParts.find(src => src.itemId === part.productId);
-                            if (source) {
-                                part.productId = source.replacedId;
-                            }
-                        });
-
-                        //replacement update call and delete unavailable items to Apex and refresh cart Items
-                        this.processesValidatedCartItems(unavailableProducts,replacedParts);
-                    }
-                    else if(response && response=='WOReplace'){
-                        //removing parts if continue without replacements
-
-                        replacedParts.forEach(part => {
-                            unavailableProducts.push({
-                                sku:part.item,
-                                cartItemId: part.cartItemId
-                            });
-                        });
-                        //remove unavailable parts and replaced parts call to apex and refresh cart Items
-                        this.processesValidatedCartItems(unavailableProducts,null);
-                    }
-                    else {
-                        // If the condition is false, stop the loading indicator by setting isLoading to false
-                        this.isLoading = false;
-                    }
-                }
-                else{
-                    // remove  parts call to apex and refresh cart Items
-                    this.processesValidatedCartItems(unavailableProducts,null);
-                }
-            } else {
-                // If quantity is valid, refresh the cart details to reflect the updated quantity
-                this.fetchCartDetails(true);
-            }
-        }else{
-            //takes user's confirmation to move ahead with replaced products or not
-            if(replacedParts.length > 0){
-
+        if (result && result != 'WOReplace') {
+            if (replacedParts.length > 0) {
                 const response = await validateAddToCart.open({
                     size: 'small',
                     content: replacedParts,
@@ -166,136 +143,74 @@ async validateCartItems(){
                     columnTitle: super.labels.originalItemColumnTitle,
                     replaced: true
                 });
-                if(response && response!='WOReplace'){
-                    //replacing parts if continue with replacements
+
+                if (response && response != 'WOReplace') {
                     partsToAdd.forEach(part => {
                         const source = replacedParts.find(src => src.itemId === part.productId);
                         if (source) {
                             part.productId = source.replacedId;
                         }
                     });
-                    //replacement update call and refresh cart Items
-                    this.processesValidatedCartItems(unavailableProducts,replacedParts);
-                }else if(response && response=='WOReplace'){
-                    //removing parts if continue without replacements
 
+                    this.processesValidatedCartItems(unavailableProducts, replacedParts);
+
+                } else if (response === 'WOReplace') {
                     replacedParts.forEach(part => {
                         unavailableProducts.push({
-                            sku:part.item,
+                            sku: part.item,
                             cartItemId: part.cartItemId
                         });
                     });
 
-                    //delete replacement parts call and refresh cart Items
-                    this.processesValidatedCartItems(unavailableProducts,null);
-                }
-                else{
-                    //If there are unavailable products, proceed to handle them by processing the validated cart items accordingly.
+                    this.processesValidatedCartItems(unavailableProducts, null);
+                } else {
                     this.isLoading = false;
                 }
+            } else {
+                this.processesValidatedCartItems(unavailableProducts, null);
             }
-            else{
-                //Trigger the price check if all the cartItems are validated
-                this.triggerPriceCheck(true);
+        } else {
+            this.fetchCartDetails(true);
+        }
+
+    } else {
+        if (replacedParts.length > 0) {
+            const response = await validateAddToCart.open({
+                size: 'small',
+                content: replacedParts,
+                headerTitle: super.labels.unavailableListItemsReplaceorgcart,
+                unavailable: false,
+                labelText: super.labels.replacementOfferedText,
+                buttonContinue: super.labels.continueReplacement,
+                buttonCancel: super.labels.continueWoReplacement,
+                columnTitle: super.labels.originalItemColumnTitle,
+                replaced: true
+            });
+
+            if (response && response != 'WOReplace') {
+                partsToAdd.forEach(part => {
+                    const source = replacedParts.find(src => src.itemId === part.productId);
+                    if (source) {
+                        part.productId = source.replacedId;
+                    }
+                });
+
+                this.processesValidatedCartItems(unavailableProducts, replacedParts);
+
+            } else if (response === 'WOReplace') {
+                replacedParts.forEach(part => {
+                    unavailableProducts.push({
+                        sku: part.item,
+                        cartItemId: part.cartItemId
+                    });
+                });
+
+                this.processesValidatedCartItems(unavailableProducts, null);
+            } else {
+                this.isLoading = false;
             }
+        } else {
+            this.triggerPriceCheck(true);
         }
     }
-
-cartItemId
-: 
-"0a9VE000002lpU9YAI"
-currencyCode
-: 
-""
-finalPart
-: 
-""
-finalPartId
-: 
-""
-finalPartPurchaseLimit
-: 
-0
-insalecategory
-: 
-true
-inventory
-: 
-allowBackOrder
-: 
-false
-currentWarehouseInventory
-: 
-0
-globalWarehouseInventory
-: 
-0
-otherWarehouseInventory
-: 
-0
-productId
-: 
-"01tUm00000Dl8c9IAB"
-productSku
-: 
-"ITEM UNAVAILABLE"
-purchaseLimit
-: 
-0
-[[Prototype]]
-: 
-Object
-inventoryAvailable
-: 
-0
-itemStatus
-: 
-""
-leadTime
-: 
-""
-lineItemText
-: 
-"23232"
-listPrice
-: 
-0
-mediaUrl
-: 
-"https://s7d2.scene7.com/is/image/Caterpillar/CM20240306-612bb-9ba32"
-name
-: 
-"ITEM UNAVAILABLE"
-newParts
-: 
-[]
-productId
-: 
-"01tUm00000Dl8c9IAB"
-purchaseLimit
-: 
-0
-quantity
-: 
-1
-replacementStatus
-: 
-""
-sequence
-: 
-4
-sku
-: 
-"ITEM UNAVAILABLE"
-totalPrice
-: 
-0
-unitPrice
-: 
-0
-uomMessage
-: 
-""
-[[Prototype]]
-: 
-Object
+}
