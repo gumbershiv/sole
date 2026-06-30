@@ -1,0 +1,301 @@
+async validateCartItems(){
+        const unavailableProducts = [];
+        const replacedParts = [];
+        const partsToAdd = [];
+        if(this.cartItems.length > this.cart_ItemLimit){
+            
+            this.isLimitExcedeed = true;
+            this.isLoading = false;
+            return;
+        }else{
+            this.isLimitExcedeed = false;
+        }
+        this.cartItems.forEach((x) => {
+            console.log('this cartItems...>',x);
+
+        /** UnavailableProducts: tracks the products that aren't available (ex: status- ItemUnavailable,not a solar product)
+        *   also selected quantity greater than available quantity and also don't have any replaced parts with enough quantity
+        */
+            if(x.itemStatus === super.labels.notSolarPartOrgcart ||((x.itemStatus === super.labels.itemUnavailableOrgCart || x.itemStatus === super.labels.outOfStock || x.itemStatus === super.labels.inStock || x.itemStatus === super.labels.labelLimitedStock) && (x.quantity > x.purchaseLimit || x.purchaseLimit==0) && (x.finalPart=='' || x.finalPartId=='' || x.finalPartPurchaseLimit==0 || (x.finalPartId && x.finalPartPurchaseLimit && x.quantity > x.finalPartPurchaseLimit)))){
+                unavailableProducts.push({
+                    sku:x.sku,
+                    cartItemId : x.cartItemId
+                });
+            }else{
+            //adds products with replaced information when original product quantity is not available than selected
+            if(x.quantity > x.purchaseLimit){
+                if(x.finalPart && this.isValidSfId(x.finalPartId) && x.finalPartPurchaseLimit > 0){
+                    replacedParts.push({
+                        cartItemId: x.cartItemId,
+                        item: x.sku,
+                        itemId: x.productId,
+                        replacedBy: x.finalPart,
+                        replacedId: x.finalPartId
+                    });
+                } else {
+                    unavailableProducts.push({
+                        sku: x.sku,
+                        cartItemId: x.cartItemId
+                    });
+                }
+            }
+        }
+        });
+
+        // logic to check duplicate items which are exceeding
+        // purchase limit when all grouped together
+        const grouped = this.cartItems.reduce((duplicateProducts, item) => {
+            if (!duplicateProducts[item.sku]) {
+                duplicateProducts[item.sku] = {count : 0, quantity : 0 , cartItemIds : [], purchaseLimit : item.purchaseLimit };
+            }
+
+            duplicateProducts[item.sku].count += 1;
+            duplicateProducts[item.sku].quantity += item.quantity;
+            duplicateProducts[item.sku].cartItemIds.push(item.cartItemId);
+
+            return duplicateProducts;
+        }, {});
+
+        //logic to add all the grouped items if they are exceeding the purchase limit
+        for (const [sku, {count,quantity,cartItemIds,purchaseLimit}] of Object.entries(grouped)) {
+            if (count > 1 && quantity > purchaseLimit) {
+                cartItemIds.map(x=>{
+                    unavailableProducts.push({
+                        sku: sku,
+                        cartItemId : x
+                    })
+                })
+            }
+        }
+
+        // filtering the replacement products array to exclude the unavailable items
+
+        if(replacedParts.length > 0){
+        const filtered = replacedParts.filter(item =>
+            !unavailableProducts.some(filterItem => filterItem.cartItemId === item.cartItemId)
+        );
+        replacedParts.length = 0;
+        replacedParts.push(...filtered);
+    }
+
+        //capturing the cartItems that are unavailable
+        if(unavailableProducts.length > 0){
+            unavailableProducts.reduce((acc, item) => {
+                acc[item.id] = item;
+                return acc;
+            }, {});
+        }
+
+        //takes user's confirmation to move ahead with only available products
+        if(unavailableProducts.length > 0){
+            const result = await validateAddToCart.open({
+                size: 'small',
+                content: unavailableProducts,
+                cartValidation: true,
+                headerTitle: super.labels.itemInsufficientOrgCart,
+                unavailable: true,
+                labelText: super.labels.stockAvailabilityNotice,
+                buttonContinue: super.labels.continue,
+                buttonCancel: super.labels.Cancel,
+                bottomMessage: super.labels.cartUnavailableOrgModalMessage,
+                replaced: false
+            });
+            if(result && result!='WOReplace'){
+                if(replacedParts.length > 0){
+
+                    const response = await validateAddToCart.open({
+                        size: 'small',
+                        content: replacedParts,
+                        headerTitle: super.labels.unavailableListItemsReplaceorgcart,
+                        unavailable: false,
+                        labelText: super.labels.replacementOfferedText,
+                        buttonContinue: super.labels.continueReplacement,
+                        buttonCancel: super.labels.continueWoReplacement,
+                        columnTitle: super.labels.originalItemColumnTitle,
+                        replaced: true
+                    });
+                    if(response && response!='WOReplace'){
+                        //replacing parts if continue with replacements
+                        partsToAdd.forEach(part => {
+                            const source = replacedParts.find(src => src.itemId === part.productId);
+                            if (source) {
+                                part.productId = source.replacedId;
+                            }
+                        });
+
+                        //replacement update call and delete unavailable items to Apex and refresh cart Items
+                        this.processesValidatedCartItems(unavailableProducts,replacedParts);
+                    }
+                    else if(response && response=='WOReplace'){
+                        //removing parts if continue without replacements
+
+                        replacedParts.forEach(part => {
+                            unavailableProducts.push({
+                                sku:part.item,
+                                cartItemId: part.cartItemId
+                            });
+                        });
+                        //remove unavailable parts and replaced parts call to apex and refresh cart Items
+                        this.processesValidatedCartItems(unavailableProducts,null);
+                    }
+                    else {
+                        // If the condition is false, stop the loading indicator by setting isLoading to false
+                        this.isLoading = false;
+                    }
+                }
+                else{
+                    // remove  parts call to apex and refresh cart Items
+                    this.processesValidatedCartItems(unavailableProducts,null);
+                }
+            } else {
+                // If quantity is valid, refresh the cart details to reflect the updated quantity
+                this.fetchCartDetails(true);
+            }
+        }else{
+            //takes user's confirmation to move ahead with replaced products or not
+            if(replacedParts.length > 0){
+
+                const response = await validateAddToCart.open({
+                    size: 'small',
+                    content: replacedParts,
+                    headerTitle: super.labels.unavailableListItemsReplaceorgcart,
+                    unavailable: false,
+                    labelText: super.labels.replacementOfferedText,
+                    buttonContinue: super.labels.continueReplacement,
+                    buttonCancel: super.labels.continueWoReplacement,
+                    columnTitle: super.labels.originalItemColumnTitle,
+                    replaced: true
+                });
+                if(response && response!='WOReplace'){
+                    //replacing parts if continue with replacements
+                    partsToAdd.forEach(part => {
+                        const source = replacedParts.find(src => src.itemId === part.productId);
+                        if (source) {
+                            part.productId = source.replacedId;
+                        }
+                    });
+                    //replacement update call and refresh cart Items
+                    this.processesValidatedCartItems(unavailableProducts,replacedParts);
+                }else if(response && response=='WOReplace'){
+                    //removing parts if continue without replacements
+
+                    replacedParts.forEach(part => {
+                        unavailableProducts.push({
+                            sku:part.item,
+                            cartItemId: part.cartItemId
+                        });
+                    });
+
+                    //delete replacement parts call and refresh cart Items
+                    this.processesValidatedCartItems(unavailableProducts,null);
+                }
+                else{
+                    //If there are unavailable products, proceed to handle them by processing the validated cart items accordingly.
+                    this.isLoading = false;
+                }
+            }
+            else{
+                //Trigger the price check if all the cartItems are validated
+                this.triggerPriceCheck(true);
+            }
+        }
+    }
+
+cartItemId
+: 
+"0a9VE000002lpU9YAI"
+currencyCode
+: 
+""
+finalPart
+: 
+""
+finalPartId
+: 
+""
+finalPartPurchaseLimit
+: 
+0
+insalecategory
+: 
+true
+inventory
+: 
+allowBackOrder
+: 
+false
+currentWarehouseInventory
+: 
+0
+globalWarehouseInventory
+: 
+0
+otherWarehouseInventory
+: 
+0
+productId
+: 
+"01tUm00000Dl8c9IAB"
+productSku
+: 
+"ITEM UNAVAILABLE"
+purchaseLimit
+: 
+0
+[[Prototype]]
+: 
+Object
+inventoryAvailable
+: 
+0
+itemStatus
+: 
+""
+leadTime
+: 
+""
+lineItemText
+: 
+"23232"
+listPrice
+: 
+0
+mediaUrl
+: 
+"https://s7d2.scene7.com/is/image/Caterpillar/CM20240306-612bb-9ba32"
+name
+: 
+"ITEM UNAVAILABLE"
+newParts
+: 
+[]
+productId
+: 
+"01tUm00000Dl8c9IAB"
+purchaseLimit
+: 
+0
+quantity
+: 
+1
+replacementStatus
+: 
+""
+sequence
+: 
+4
+sku
+: 
+"ITEM UNAVAILABLE"
+totalPrice
+: 
+0
+unitPrice
+: 
+0
+uomMessage
+: 
+""
+[[Prototype]]
+: 
+Object
