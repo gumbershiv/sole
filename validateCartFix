@@ -1,9 +1,11 @@
-async validateCartItems() {
+import { determineBasicDisplayStatus } from 'c/b2bUtil';
+
+async validateCartItems(){
     const unavailableProducts = [];
     const replacedParts = [];
     const partsToAdd = [];
 
-    if (this.cartItems.length > this.cart_ItemLimit) {
+    if(this.cartItems.length > this.cart_ItemLimit){
         this.isLimitExcedeed = true;
         this.isLoading = false;
         return;
@@ -12,27 +14,39 @@ async validateCartItems() {
     }
 
     this.cartItems.forEach((x) => {
-        console.log('this cartItems...>', x);
 
-        // ✅ NEW: derive purchaseLimit from inventory
         const inventory = x.inventory || {};
+
+        // ✅ Purchase limit logic
         const purchaseLimit = inventory.allowBackOrder
             ? 99999
             : (inventory.globalWarehouseInventory || 0);
 
-        // attach back if needed later
         x.purchaseLimit = purchaseLimit;
 
-        /** UnavailableProducts logic */
+        // ✅ Use LABELS instead of hardcoded strings
+        const getStatus = (qty) => {
+            if (qty === 0) return super.labels.outOfStock;
+            if (qty > 0 && qty <= 5) return super.labels.labelLimitedStock;
+            if (qty > 5) return super.labels.inStock;
+            return super.labels.itemUnavailableOrgCart; // fallback
+        };
+
+        const currentStatus = getStatus(inventory.currentWarehouseInventory);
+        const otherStatus = getStatus(inventory.otherWarehouseInventory);
+
+        const computedStatus = determineBasicDisplayStatus(currentStatus, otherStatus);
+
+        const isOutOfStock = computedStatus === super.labels.outOfStock;
+        const isInStock = computedStatus === super.labels.inStock;
+        const isLimitedStock = computedStatus === super.labels.labelLimitedStock;
+        const isUnavailable = computedStatus === super.labels.itemUnavailableOrgCart;
+
+        // 🚨 Unavailable logic
         if (
-            x.itemStatus === super.labels.notSolarPartOrgcart ||
+            isUnavailable ||
             (
-                (
-                    x.itemStatus === super.labels.itemUnavailableOrgCart ||
-                    x.itemStatus === super.labels.outOfStock ||
-                    x.itemStatus === super.labels.inStock ||
-                    x.itemStatus === super.labels.labelLimitedStock
-                ) &&
+                (isOutOfStock || isInStock || isLimitedStock) &&
                 (x.quantity > purchaseLimit || purchaseLimit === 0) &&
                 (
                     x.finalPart === '' ||
@@ -45,19 +59,15 @@ async validateCartItems() {
                     )
                 )
             )
-        ) {
+        ){
             unavailableProducts.push({
                 sku: x.sku,
-                cartItemId: x.cartItemId
+                cartItemId : x.cartItemId
             });
         } else {
-            // replacement logic
-            if (x.quantity > purchaseLimit) {
-                if (
-                    x.finalPart &&
-                    this.isValidSfId(x.finalPartId) &&
-                    x.finalPartPurchaseLimit > 0
-                ) {
+
+            if(x.quantity > purchaseLimit){
+                if(x.finalPart && this.isValidSfId(x.finalPartId) && x.finalPartPurchaseLimit > 0){
                     replacedParts.push({
                         cartItemId: x.cartItemId,
                         item: x.sku,
@@ -75,14 +85,14 @@ async validateCartItems() {
         }
     });
 
-    // ✅ grouped duplicate validation (uses updated purchaseLimit)
+    // 🔁 GROUPED VALIDATION
     const grouped = this.cartItems.reduce((duplicateProducts, item) => {
         if (!duplicateProducts[item.sku]) {
             duplicateProducts[item.sku] = {
-                count: 0,
-                quantity: 0,
-                cartItemIds: [],
-                purchaseLimit: item.purchaseLimit
+                count : 0,
+                quantity : 0,
+                cartItemIds : [],
+                purchaseLimit : item.purchaseLimit
             };
         }
 
@@ -93,19 +103,19 @@ async validateCartItems() {
         return duplicateProducts;
     }, {});
 
-    for (const [sku, { count, quantity, cartItemIds, purchaseLimit }] of Object.entries(grouped)) {
+    for (const [sku, {count, quantity, cartItemIds, purchaseLimit}] of Object.entries(grouped)) {
         if (count > 1 && quantity > purchaseLimit) {
             cartItemIds.forEach(id => {
                 unavailableProducts.push({
-                    sku,
-                    cartItemId: id
+                    sku: sku,
+                    cartItemId : id
                 });
             });
         }
     }
 
-    // ✅ filter replaced parts
-    if (replacedParts.length > 0) {
+    // 🔁 Filter replaced parts
+    if(replacedParts.length > 0){
         const filtered = replacedParts.filter(item =>
             !unavailableProducts.some(f => f.cartItemId === item.cartItemId)
         );
@@ -113,10 +123,8 @@ async validateCartItems() {
         replacedParts.push(...filtered);
     }
 
-    // rest of your logic remains SAME ↓↓↓
-    // (modals, process calls, etc.)
-    
-    if (unavailableProducts.length > 0) {
+    // 🚨 HANDLE UNAVAILABLE (unchanged)
+    if(unavailableProducts.length > 0){
         const result = await validateAddToCart.open({
             size: 'small',
             content: unavailableProducts,
@@ -130,8 +138,9 @@ async validateCartItems() {
             replaced: false
         });
 
-        if (result && result != 'WOReplace') {
-            if (replacedParts.length > 0) {
+        if(result && result !== 'WOReplace'){
+            if(replacedParts.length > 0){
+
                 const response = await validateAddToCart.open({
                     size: 'small',
                     content: replacedParts,
@@ -144,7 +153,7 @@ async validateCartItems() {
                     replaced: true
                 });
 
-                if (response && response != 'WOReplace') {
+                if(response && response !== 'WOReplace'){
                     partsToAdd.forEach(part => {
                         const source = replacedParts.find(src => src.itemId === part.productId);
                         if (source) {
@@ -154,7 +163,7 @@ async validateCartItems() {
 
                     this.processesValidatedCartItems(unavailableProducts, replacedParts);
 
-                } else if (response === 'WOReplace') {
+                } else if(response === 'WOReplace'){
                     replacedParts.forEach(part => {
                         unavailableProducts.push({
                             sku: part.item,
@@ -166,6 +175,7 @@ async validateCartItems() {
                 } else {
                     this.isLoading = false;
                 }
+
             } else {
                 this.processesValidatedCartItems(unavailableProducts, null);
             }
@@ -174,7 +184,9 @@ async validateCartItems() {
         }
 
     } else {
-        if (replacedParts.length > 0) {
+
+        if(replacedParts.length > 0){
+
             const response = await validateAddToCart.open({
                 size: 'small',
                 content: replacedParts,
@@ -187,7 +199,7 @@ async validateCartItems() {
                 replaced: true
             });
 
-            if (response && response != 'WOReplace') {
+            if(response && response !== 'WOReplace'){
                 partsToAdd.forEach(part => {
                     const source = replacedParts.find(src => src.itemId === part.productId);
                     if (source) {
@@ -197,7 +209,7 @@ async validateCartItems() {
 
                 this.processesValidatedCartItems(unavailableProducts, replacedParts);
 
-            } else if (response === 'WOReplace') {
+            } else if(response === 'WOReplace'){
                 replacedParts.forEach(part => {
                     unavailableProducts.push({
                         sku: part.item,
@@ -209,6 +221,7 @@ async validateCartItems() {
             } else {
                 this.isLoading = false;
             }
+
         } else {
             this.triggerPriceCheck(true);
         }
